@@ -1,0 +1,14 @@
+# Omarchy themes installed via 'omarchy theme install <url>'.
+# Reinstall all after a fresh setup with:
+#   grep -v '^#' ~/.config/omarchy/themes-installed.txt | awk '{print $2}' | xargs -rn1 omarchy theme install
+#
+ash                https://github.com/bjarneo/omarchy-ash-theme
+ayaka              https://github.com/abhijeet-swami/omarchy-ayaka-theme
+catppuccin-dark    https://github.com/Luquatic/omarchy-catppuccin-dark
+cpunk              https://github.com/stannorbvb-cmd/cpunk
+ghost-pastel       https://github.com/row-huh/omarchy-ghost-pastel-theme
+monokai            https://github.com/bjarneo/omarchy-monokai-theme
+rose-pine-dark     https://github.com/guilhermetk/omarchy-rose-pine-dark
+snow_black         https://github.com/ankur311sudo/snow_black
+solarizedosaka     https://github.com/motorsss/omarchy-solarizedosaka-theme
+vhs80              https://github.com/tahayvr/omarchy-vhs80-theme

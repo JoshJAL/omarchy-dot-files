@@ -1,0 +1,34 @@
+#!/bin/bash
+
+# Rebuild Hyprland plugins (hyprpm) after an Omarchy/system update.
+#
+# When the `hyprland` package upgrades, hyprpm plugins built against the old
+# headers stop loading, and on next login Hyprland tells you to run
+# `hyprpm update` manually. This hook does that for you automatically.
+#
+# It also self-heals the "Failed to write plugin state" error: hyprpm refuses
+# to run as root, so if its state under /var/cache/hyprpm ever gets left
+# root-owned (e.g. by a stray `sudo hyprpm update`), updates fail. We fix the
+# ownership non-interactively here (sudo is cached during `omarchy update`).
+
+# Nothing to do if hyprpm isn't installed.
+command -v hyprpm &>/dev/null || exit 0
+
+# Skip if no plugins are installed.
+hyprpm list 2>/dev/null | grep -q "Plugin" || exit 0
+
+cache="/var/cache/hyprpm/$USER"
+
+# Self-heal ownership only if something under the cache isn't owned by us.
+if [[ -d $cache ]] && find "$cache" ! -user "$USER" -print -quit 2>/dev/null | grep -q .; then
+  sudo -n chown -R "$(id -un):$(id -gn)" "$cache" 2>/dev/null ||
+    echo "hyprpm hook: could not fix ownership of $cache (run: sudo chown -R $(id -un): $cache)"
+fi
+
+# Rebuild plugins against the current Hyprland headers and load them.
+if hyprpm update; then
+  hyprpm reload &>/dev/null || true
+  notify-send -u low "Hyprland plugins rebuilt" "hyprpm update completed after system update" 2>/dev/null || true
+else
+  notify-send -u critical "hyprpm update failed" "Run 'hyprpm update' manually to rebuild Hyprland plugins" 2>/dev/null || true
+fi
