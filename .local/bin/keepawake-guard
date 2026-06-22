@@ -1,0 +1,91 @@
+#!/bin/bash
+# keepawake-guard — prevent hypridle from blanking/locking while the system is "busy".
+#
+# Holds a systemd idle inhibitor (--what=idle, block mode) whenever EITHER:
+#   * audio is actively playing on any PulseAudio/PipeWire sink, OR
+#   * overall CPU usage is above a threshold (covers active terminal jobs:
+#     builds, compiles, test runs, encodes, etc.)
+#
+# While the inhibitor is held, hypridle pauses its idle timers, so the
+# screensaver/lock never trigger. When things go quiet the inhibitor is
+# released and your normal hypridle timeouts resume.
+#
+# NOTE: a command that is *running but using ~no CPU* (an idle dev server,
+# a waiting SSH session, a paused REPL) cannot be distinguished from "nothing
+# happening" and will NOT inhibit the lock. To force-keep-awake around such a
+# command, wrap it:  systemd-inhibit --what=idle <your-command>
+#
+# Tunables (env-overridable):
+#   KEEPAWAKE_POLL          seconds between checks            (default 30)
+#   KEEPAWAKE_CPU_THRESHOLD overall CPU %% that counts as busy (default 8)
+#                           On this 20-core box ~8%% ≈ one fully-busy core.
+
+POLL="${KEEPAWAKE_POLL:-30}"
+CPU_THRESHOLD="${KEEPAWAKE_CPU_THRESHOLD:-8}"
+WHO="keepawake-guard"
+
+INHIBIT_PID=""
+
+# ---- single instance guard -------------------------------------------------
+LOCKFILE="${XDG_RUNTIME_DIR:-/tmp}/keepawake-guard.lock"
+exec 9>"$LOCKFILE"
+if ! flock -n 9; then
+    echo "keepawake-guard: already running" >&2
+    exit 0
+fi
+
+# ---- cpu sampling ----------------------------------------------------------
+cpu_snapshot() {
+    # echoes "<total> <idle>" jiffies from /proc/stat aggregate cpu line
+    awk '/^cpu /{idle=$5+$6; total=0; for(i=2;i<=NF;i++) total+=$i; print total, idle; exit}' /proc/stat
+}
+
+cpu_busy() {
+    read -r t1 i1 < <(cpu_snapshot)
+    sleep 1
+    read -r t2 i2 < <(cpu_snapshot)
+    local dt=$((t2 - t1)) di=$((i2 - i1))
+    [ "$dt" -le 0 ] && return 1
+    # busy% = 100 * (1 - idle_delta/total_delta)
+    awk -v dt="$dt" -v di="$di" -v thr="$CPU_THRESHOLD" \
+        'BEGIN { busy = 100 * (1 - di/dt); exit !(busy >= thr) }'
+}
+
+audio_playing() {
+    pactl list sinks 2>/dev/null | grep -q 'State: RUNNING'
+}
+
+is_busy() {
+    audio_playing && return 0
+    cpu_busy && return 0
+    return 1
+}
+
+# ---- inhibitor management --------------------------------------------------
+start_inhibit() {
+    if [ -n "$INHIBIT_PID" ] && kill -0 "$INHIBIT_PID" 2>/dev/null; then
+        return
+    fi
+    systemd-inhibit --what=idle --who="$WHO" --why="audio or CPU activity" \
+        --mode=block sleep infinity &
+    INHIBIT_PID=$!
+}
+
+stop_inhibit() {
+    [ -n "$INHIBIT_PID" ] || return
+    kill "$INHIBIT_PID" 2>/dev/null
+    INHIBIT_PID=""
+}
+
+cleanup() { stop_inhibit; exit 0; }
+trap cleanup TERM INT EXIT
+
+# ---- main loop -------------------------------------------------------------
+while true; do
+    if is_busy; then
+        start_inhibit
+    else
+        stop_inhibit
+    fi
+    sleep "$POLL"
+done
