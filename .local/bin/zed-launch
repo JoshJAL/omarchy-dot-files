@@ -1,0 +1,4 @@
+#!/bin/bash
+pkill -9 -x zed 2>/dev/null
+sleep 0.5
+/home/joshjal/.local/zed.app/bin/zed --foreground "$@" &
