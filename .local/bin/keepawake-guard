@@ -1,19 +1,43 @@
 #!/bin/bash
-# keepawake-guard — prevent hypridle from blanking/locking while the system is "busy".
+# keepawake-guard — prevent blanking/locking while the system is "busy".
 #
-# Holds a systemd idle inhibitor (--what=idle, block mode) whenever EITHER:
+# Holds an idle inhibit whenever EITHER:
 #   * audio is actively playing on any PulseAudio/PipeWire sink, OR
 #   * overall CPU usage is above a threshold (covers active terminal jobs:
 #     builds, compiles, test runs, encodes, etc.)
 #
-# While the inhibitor is held, hypridle pauses its idle timers, so the
-# screensaver/lock never trigger. When things go quiet the inhibitor is
-# released and your normal hypridle timeouts resume.
+# OMARCHY 4 (QUATTRO) NOTE — why this holds two different inhibits:
+#
+# Under Omarchy 3 this script only held a systemd idle inhibitor, because
+# hypridle honored logind inhibitors. Quattro retired hypridle. Its replacement
+# is a Quickshell service (shell/plugins/services/idle/Service.qml) whose
+# IdleMonitor comes from Quickshell/Wayland/_IdleNotify — the Wayland
+# ext-idle-notify protocol. Its `respectInhibitors: true` honors *Wayland*
+# idle inhibitors, not logind ones, so a systemd inhibitor alone no longer
+# stops the screensaver or the lock.
+#
+# What the Quattro service does gate on is its stay-awake state file, the same
+# one `omarchy toggle idle` writes and the bar's indicator reflects. So:
+#
+#   * systemd inhibitor  -> still held, still prevents logind idle actions
+#                           and suspend during long jobs.
+#   * stay-awake state   -> what actually holds off Quattro's screensaver/lock.
+#
+# Expect the bar's stay-awake indicator to switch on by itself while the
+# machine is busy. That is this script, and it is the visible signal that the
+# guard is working.
+#
+# A manual toggle always wins: if stay-awake is already set when we go busy, we
+# treat it as yours and never clear it. We only ever clear a state we set
+# ourselves, tracked by a marker file in $XDG_RUNTIME_DIR (which the session
+# clears on logout, so a marker found at startup means a previous run was
+# killed and left the state set — we clean that up).
 #
 # NOTE: a command that is *running but using ~no CPU* (an idle dev server,
 # a waiting SSH session, a paused REPL) cannot be distinguished from "nothing
 # happening" and will NOT inhibit the lock. To force-keep-awake around such a
 # command, wrap it:  systemd-inhibit --what=idle <your-command>
+# ...or just flip the indicator yourself with `omarchy toggle idle stay-awake`.
 #
 # Tunables (env-overridable):
 #   KEEPAWAKE_POLL          seconds between checks            (default 30)
@@ -25,6 +49,8 @@ CPU_THRESHOLD="${KEEPAWAKE_CPU_THRESHOLD:-8}"
 WHO="keepawake-guard"
 
 INHIBIT_PID=""
+STAY_AWAKE_STATE="$HOME/.local/state/omarchy/indicators/stay-awake"
+OWNED_MARKER="${XDG_RUNTIME_DIR:-/tmp}/keepawake-guard.owns-stay-awake"
 
 # ---- single instance guard -------------------------------------------------
 LOCKFILE="${XDG_RUNTIME_DIR:-/tmp}/keepawake-guard.lock"
@@ -61,7 +87,7 @@ is_busy() {
     return 1
 }
 
-# ---- inhibitor management --------------------------------------------------
+# ---- systemd inhibitor (logind idle actions and suspend) -------------------
 start_inhibit() {
     if [ -n "$INHIBIT_PID" ] && kill -0 "$INHIBIT_PID" 2>/dev/null; then
         return
@@ -77,15 +103,41 @@ stop_inhibit() {
     INHIBIT_PID=""
 }
 
-cleanup() { stop_inhibit; exit 0; }
+# ---- Quattro stay-awake state (screensaver and lock) -----------------------
+stay_awake_set() { [ -f "$STAY_AWAKE_STATE" ]; }
+we_own_stay_awake() { [ -f "$OWNED_MARKER" ]; }
+
+start_stay_awake() {
+    we_own_stay_awake && return
+    # Already set by hand? Leave it alone; it is not ours to clear later.
+    stay_awake_set && return
+    omarchy-toggle-idle stay-awake >/dev/null 2>&1 && : >"$OWNED_MARKER"
+}
+
+stop_stay_awake() {
+    we_own_stay_awake || return
+    omarchy-toggle-idle allow-idle >/dev/null 2>&1
+    rm -f "$OWNED_MARKER"
+}
+
+# A marker left over from a previous run means that run was killed before it
+# could release the state. Clear it now so the machine cannot be stuck awake.
+if we_own_stay_awake; then
+    omarchy-toggle-idle allow-idle >/dev/null 2>&1
+    rm -f "$OWNED_MARKER"
+fi
+
+cleanup() { stop_inhibit; stop_stay_awake; exit 0; }
 trap cleanup TERM INT EXIT
 
 # ---- main loop -------------------------------------------------------------
 while true; do
     if is_busy; then
         start_inhibit
+        start_stay_awake
     else
         stop_inhibit
+        stop_stay_awake
     fi
     sleep "$POLL"
 done
