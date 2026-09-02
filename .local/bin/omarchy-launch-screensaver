@@ -1,0 +1,44 @@
+#!/bin/bash
+
+# Randomize the screensaver artwork, then hand off to Omarchy's real launcher.
+#
+# Why this file shadows a packaged command:
+#
+# Omarchy 4's idle service (shell/plugins/services/idle/Service.qml) runs a
+# hardcoded `omarchy-launch-screensaver` through `bash -lc`, and omarchy-screensaver
+# renders exactly one file, ~/.config/omarchy/branding/screensaver.txt. Its
+# --random-effect flag randomizes the animation, not the art. There is no
+# screensaver hook to attach to, so the only way to randomize the art on the
+# automatic idle screensaver is to shadow the command on the login-shell PATH,
+# where ~/.local/bin sits ahead of /usr/bin.
+#
+# SUPER+S in ~/.config/hypr/bindings.lua calls this file by absolute path,
+# because Hyprland's exec dispatcher does not go through a login shell.
+#
+# To turn randomization off, delete this file. Nothing else depends on it, and
+# the packaged command takes over again immediately.
+
+set -uo pipefail
+
+screensavers="$HOME/.config/omarchy/branding/screensavers"
+target="$HOME/.config/omarchy/branding/screensaver.txt"
+
+real="${OMARCHY_PATH:-/usr/share/omarchy}/bin/omarchy-launch-screensaver"
+[[ -x $real ]] || real=/usr/bin/omarchy-launch-screensaver
+
+# Never exec ourselves: a dev-link or an odd OMARCHY_PATH could otherwise
+# resolve back to this file and fork-bomb the session.
+if [[ $(readlink -f -- "$real") == "$(readlink -f -- "${BASH_SOURCE[0]}")" ]]; then
+  echo "omarchy-launch-screensaver: refusing to exec self ($real)" >&2
+  exit 1
+fi
+
+shopt -s nullglob
+files=("$screensavers"/*.txt)
+shopt -u nullglob
+
+if ((${#files[@]})); then
+  cp -- "${files[RANDOM % ${#files[@]}]}" "$target"
+fi
+
+exec "$real" "$@"
