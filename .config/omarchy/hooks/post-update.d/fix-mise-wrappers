@@ -1,0 +1,57 @@
+#!/bin/bash
+
+# Keep Omarchy's mise wrappers from recursing through PATH.
+#
+# Omarchy's /usr/bin/omarchy-mise-install generates wrappers ending in
+#   exec mise x "<pkg>" -- "<bin>" "$@"
+# `mise x` resolves <bin> inside the named tool first, but when it is not found
+# there it falls back to the PATH mise exports -- and that PATH lists
+# ~/.local/bin BEFORE ~/.local/share/mise/installs/<tool>/... So the wrapper
+# re-enters itself, forever, for any caller lacking __MISE_DIFF (GUI apps,
+# systemd units, Electron apps like T3 Code). An activated interactive shell
+# short-circuits `mise x`, which is why this only bites outside the terminal.
+# It bites whenever a tool is mid-upgrade, pruned, or provides a bin under a
+# name mise does not expect.
+#
+# omarchy-refresh-applications re-runs install/user/mise.sh (13 tools, codex
+# among them) on every update, and pacman restores the stock generator when the
+# omarchy package upgrades -- so both need re-fixing after an update.
+
+set -u
+
+patched="$HOME/.local/share/omarchy-mise-fix/omarchy-mise-install"
+system="/usr/bin/omarchy-mise-install"
+
+[[ -x $patched ]] || exit 0
+
+# 1. Re-apply the generator patch if pacman reverted it. sudo is cached during
+#    `omarchy update`; if it is not, skip quietly rather than prompting.
+if [[ -f $system ]] && ! cmp -s "$patched" "$system"; then
+  if sudo -n install -m 755 "$patched" "$system" 2>/dev/null; then
+    echo "fix-mise-wrappers: patched $system (it generates recursing wrappers)"
+  else
+    echo "fix-mise-wrappers: $system still generates recursing wrappers;" \
+         "run: sudo install -m 755 $patched $system"
+  fi
+fi
+
+# 2. Rewrite any wrapper still in the recursing form. Parse the tool/bin out of
+#    the stock wrapper so the regenerated one keeps the same mapping.
+shopt -s nullglob
+for wrapper in "$HOME/.local/bin"/*; do
+  [[ -f $wrapper && -x $wrapper && ! -L $wrapper ]] || continue
+  # Only small shell scripts. Skips AppImages and other binaries in ~/.local/bin.
+  [[ $(stat -c %s "$wrapper" 2>/dev/null || echo 0) -le 65536 ]] || continue
+  IFS= read -r shebang <"$wrapper" 2>/dev/null || continue
+  [[ $shebang == '#!'*sh ]] || continue
+  grep -avE '^[[:space:]]*#' "$wrapper" | grep -aq 'exec mise x' || continue
+
+  package=$(sed -n 's/^mise use -g --quiet "\(.*\)".*$/\1/p' "$wrapper" | head -1)
+  [[ -n $package ]] || package=$(sed -n 's/^mise use -g "\(.*\)"$/\1/p' "$wrapper" | head -1)
+  bin=$(sed -n 's/^exec mise x ".*" -- "\([^"]*\)".*$/\1/p' "$wrapper" | head -1)
+  command=$(basename "$wrapper")
+  [[ -n $package && -n $bin ]] || continue
+
+  "$patched" "$package" "$command" "$bin" &&
+    echo "fix-mise-wrappers: regenerated $command (tool: $package, bin: $bin)"
+done
