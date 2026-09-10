@@ -1,0 +1,10 @@
+[tools]
+claude = "latest"
+codex = "latest"
+gh = "latest"
+glab = "latest"
+node = "26"
+"npm:mex-agent" = "latest"
+
+[settings]
+minimum_release_age = "0"
