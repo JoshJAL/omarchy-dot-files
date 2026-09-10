@@ -1,0 +1,2 @@
+# Local editor/manual backups — never part of the tracked config.
+*.bak
