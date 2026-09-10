@@ -7,10 +7,10 @@
           "id": "omarchy.indicators"
         },
         {
-          "format": "dddd HH:mm",
-          "formatAlt": "d MMMM 'W'ww yyyy",
           "id": "omarchy.clock",
-          "verticalFormat": "HH\n—\nmm"
+          "format": "ddd d MMM h:mm AP",
+          "formatAlt": "d MMMM 'W'ww yyyy",
+          "verticalFormat": "h\n—\nmm\nAP"
         },
         {
           "id": "omarchy.keyboard-layout"
@@ -28,6 +28,10 @@
         },
         {
           "id": "omarchy.workspaces"
+        },
+        {
+          "id": "joshjal.taskbar",
+          "previewDelay": 320
         }
       ],
       "right": [
