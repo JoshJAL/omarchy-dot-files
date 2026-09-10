@@ -72,33 +72,14 @@ require("default.hypr.toggles")
 
 -- Add any other personal Hyprland configuration below.
 -- o.window("qemu", { workspace = "5" })
--- Append to the bottom of the freshly installed ~/.config/hypr/hyprland.lua,
--- AFTER require("default.hypr.toggles").
 --
--- Ported from the `plugin:dynamic-cursors { ... }` block in the old hyprland.conf.
--- Note the Lua key is `dynamic_cursors` with an underscore, where hyprlang used
--- a hyphen. This follows the plugin's own README:
--- https://github.com/VirtCode/hypr-dynamic-cursors
 
--- hyprpm rebuilds this .so for each Hyprland version; the path is stable.
--- Loading here rather than via `exec-once = hyprpm reload` is what makes the
--- config below take effect: exec-once fires after the config is read, so the
--- guard would still be false by then.
-hl.plugin.load("/var/cache/hyprpm/joshjal/dynamic-cursors/dynamic-cursors.so")
-
--- The guard is the plugin author's documented pattern, and it is what keeps a
--- failed load (hyprpm not yet rebuilt for a new Hyprland) from turning into a
--- config error. If the plugin ever stops building, delete this whole block --
--- nothing else depends on it.
-if hl.plugin.dynamic_cursors then
-  hl.config({ plugin = { dynamic_cursors = {
-    mode = "none",
-    shake = {
-      enabled = true,
-      threshold = 6.0,
-      base = 4.0,
-      speed = 4.0,
-      timeout = 2000,
-    },
-  }}})
-end
+-- 2026-09-03: Pin VA-API to the Intel media driver.
+-- Both iHD_drv_video.so (Intel) and nvidia_drv_video.so are installed. With no
+-- LIBVA_DRIVER_NAME, libva can select the NVIDIA driver, which allocates NV12
+-- dmabuf frames that Intel's EGL (the GPU Hyprland composites on) cannot import.
+-- Symptom was eglCreateImage EGL_BAD_MATCH ~30x/sec in every Chromium/Electron
+-- app: stutter, missing page styles, unscrollable pages.
+-- Measured on sofwerx.org: 908 EGL failures/16s default, 0 with iHD.
+-- Benefits Slack, 1Password and other Electron apps too, not just browsers.
+hl.env("LIBVA_DRIVER_NAME", "iHD")

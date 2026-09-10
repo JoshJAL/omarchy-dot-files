@@ -14,6 +14,13 @@ live in `~/.local/share/omarchy/` (overwritten on update, not ours to edit).
 So writing a `hyprland.lua` on Omarchy 3 means losing every Omarchy default.
 Omarchy 4 is the migration.
 
+
+> **2026-09-03: the dynamic-cursors plugin was removed for good.**
+> It was loading into Hyprland's renderer and was the cause of window
+> transparency-on-resize and style corruption in Chromium browsers.
+> `hyprland.lua.snippet` is retired (kept as `.REMOVED-2026-09-03`) and the
+> one-liner below has had its snippet-append removed. Do not re-add it.
+
 ## Order of operations
 
 1. `omarchy update`                (pulls the intermediate migrations)
@@ -22,7 +29,7 @@ Omarchy 4 is the migration.
 4. Paste the one-liner below.
 
 ```
-if grep -q bootstrap.lua ~/.config/hypr/hyprland.lua 2>/dev/null; then cp ~/hypr-quattro-port/{monitors,input,bindings,autostart}.lua ~/.config/hypr/ && { grep -q dynamic_cursors ~/.config/hypr/hyprland.lua || cat ~/hypr-quattro-port/hyprland.lua.snippet >> ~/.config/hypr/hyprland.lua; } && hyprctl reload && hyprctl configerrors && echo "Done."; else echo "Not on Omarchy 4 yet - run: omarchy update, then omarchy upgrade to quattro, reboot, then paste this again."; fi
+if grep -q bootstrap.lua ~/.config/hypr/hyprland.lua 2>/dev/null; then cp ~/hypr-quattro-port/{monitors,input,bindings,autostart}.lua ~/.config/hypr/ && hyprctl reload && hyprctl configerrors && echo "Done."; else echo "Not on Omarchy 4 yet - run: omarchy update, then omarchy upgrade to quattro, reboot, then paste this again."; fi
 ```
 
 It refuses to run before the upgrade (appending the snippet to a non-existent
