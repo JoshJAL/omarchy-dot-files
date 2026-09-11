@@ -8,3 +8,6 @@ node = "26"
 
 [settings]
 minimum_release_age = "0"
+
+[settings.upgrade]
+auto_prune = false
