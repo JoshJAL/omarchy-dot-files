@@ -45,6 +45,7 @@ dotfiles checkout -- .config/hypr/monitors.lua
 | Omarchy shell — bar layout, widgets, idle/lock timings | `~/.config/omarchy/shell.json` |
 | Omarchy hooks / branding | `~/.config/omarchy/` |
 | Terminals | `~/.config/alacritty/`, `~/.config/kitty/`, `~/.config/ghostty/` |
+| Default terminal (xdg-terminal-exec) | `~/.config/xdg-terminals.list` |
 | Browser launch flags | `~/.config/*-flags.conf` |
 | git, mise, starship | `~/.config/git/`, `~/.config/mise/`, `~/.config/starship.toml` |
 | Personal scripts | `~/.local/bin/` |
