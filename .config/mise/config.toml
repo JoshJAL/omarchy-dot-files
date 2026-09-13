@@ -1,13 +1,17 @@
 [tools]
+"aqua:supabase/cli" = "latest"
 claude = "latest"
 codex = "latest"
 gh = "latest"
 glab = "latest"
 node = "26"
 "npm:mex-agent" = "latest"
+"npm:vercel" = "latest"
+opencode = "latest"
 
 [settings]
 minimum_release_age = "0"
+idiomatic_version_file_enable_tools = ["node"]
 
 [settings.upgrade]
 auto_prune = false
