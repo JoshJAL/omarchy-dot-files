@@ -21,6 +21,7 @@ All are optional and hot-reload when `shell.json` is saved.
 | `previewHeight` | `200` | Max height of the captured image; taller windows are letterboxed, not stretched. |
 | `iconSize` | `14` | Icon size, matching the old waybar `icon-size`. |
 | `iconSizeMin` | `10` | Floor that icons shrink to as the window count grows. |
+| `maxIcons` | `0` | Show at most this many icons; the rest collapse behind a "+N" chip. `0` = unlimited. A count rather than a width because a plugin cannot measure the room it has — `ModuleSlot` asks the widget for its `implicitWidth`, so the constraint only ever flows upward, and `PluginBarApi` carries no geometry. |
 | `includeSpecial` | `false` | Include scratchpad / special workspaces. |
 | `classIconOverrides` | `{}` | `{"SomeClass": "icon-name"}` for apps whose window class matches no desktop entry — common for Electron apps and PWAs. |
 
@@ -28,11 +29,19 @@ All are optional and hot-reload when `shell.json` is saved.
 
 - **Scope:** every window on this monitor, across all of its workspaces. A bar
   exists per monitor, so each instance filters to its own.
-- **Left click** focuses, **middle click** closes, **right click** opens a menu.
+- **Left click** focuses, **middle click** closes, **right click** opens a menu:
+  Close window · Move to workspace ▸ · Toggle floating · Move to `<monitor>`.
+  Moving to a workspace **follows** the window, matching `SUPER+SHIFT+n`; moving
+  to a monitor does not, since the window becomes visible there anyway and
+  following would yank focus across screens. The monitor rows are named for the
+  actual monitors and disappear on a single-monitor machine.
+- The menu acts on the window you **right-clicked**, which is usually not the
+  focused one — that is the whole point, and why the card carries a title header
+  naming its target.
 - **Hover** shows a live capture; a window with no capturable content falls back
   to a large icon, its class, title and workspace.
 
-## Two things that will bite whoever edits this
+## Four things that will bite whoever edits this
 
 **1. Never touch Hyprland state from inside `onRawEvent`.**
 
@@ -61,6 +70,29 @@ taskbar would slam shut an open clock calendar or audio panel. `PreviewBarShim`
 mirrors the four members `PopupCard` actually reads and makes the popout calls
 inert. The context menu keeps the real `bar`, where taking the slot is correct.
 
+**3. Never put a `HyprlandToplevel` in a `ListModel` role.**
+
+A QObject stored in a model role becomes a dangling C++ pointer the moment its
+owner destroys it, and the next read of that role segfaults inside
+`QQmlListModel::data`. Omarchy hit this itself and documented it in
+`plugins/notifications/Service.qml`. The model here holds primitives only; the
+toplevel lives in a plain JS map on the widget root, keyed by address. Nothing
+in a delegate needs it — every action dispatches by address, and the preview
+gets its capture source handed over separately.
+
+Related: `ListModel` fixes each role's type from the **first** row inserted. A
+`null` at that moment poisons the role for the life of the process, and rows
+carrying keys the model has not seen are silently dropped. `WindowModel.row()`
+is the single factory precisely so every row has all eight keys, always coerced.
+
+**4. Never make a `PopupCard` its own `owner`.**
+
+`PopupCard.close()` does `if ("close" in owner) owner.close()`, and
+`"close" in card` is true — so `owner: theCard` is unbounded recursion. The menu
+uses `owner: root` (and the root defines `close()`); the preview and overflow
+each get a dedicated owner `QtObject`. Distinct owners also give each popup its
+own `coordinatorKey`, which is what makes them close each other correctly.
+
 ## Other notes
 
 - Quickshell reports `HyprlandToplevel.address` **without** the `0x` prefix, but
@@ -72,6 +104,18 @@ inert. The context menu keeps the real `bar`, where taking the slot is correct.
   `monitor` and `lastIpcObject` all empty. Without the `pendingRetry` path those
   windows are dropped from every bar. This is not rare — it happens on every
   shell start.
+- `BarIconButton` has no press-time hook: `WidgetButton` emits `pressed` from
+  `onClicked`, i.e. on **release**. So the menu opens on release, and there is
+  no trailing release to swallow. Stacking a second `hoverEnabled` MouseArea to
+  get press-time events would break `tooltipHovered`, and with it the whole
+  preview state machine.
+- The menu closes **before** it dispatches. `HyprlandFocusGrab.active` is still
+  true while a row handler runs, and dispatching a focus or move command then
+  can land focus on the grab owner or bounce it to the bar. The target is
+  captured into plain properties first (closing destroys the row delegate and
+  its ids stop resolving), and the dispatch runs from `onVisibleChanged` at the
+  end of the card's 140ms fade — a real barrier, where `Timer{interval:0}` only
+  yields the event loop and can still land inside a live grab.
 - Live capture works on windows sitting on **hidden workspaces**: Hyprland's
   toplevel export re-renders the window rather than reading back the monitor.
   That is why there is no snapshot cache.
@@ -85,3 +129,19 @@ it, and a crash costs you nothing:
 ```
 qs -p ~/taskbar-sandbox/shell/sandbox.qml
 ```
+
+Its `taskbar/` directory is symlinked to this one, so there is a single source
+of truth. It exposes an IPC handler (`qs -p … ipc call tb state|menu|hover|…`)
+because this machine has no pointer synthesis — no ydotool, and the user is no
+longer in the `input` group, so `/dev/uinput` is unreachable — and clicks
+therefore cannot be scripted.
+
+**What the sandbox cannot prove.** `PopupCard.availableCardHeight` subtracts the
+anchor window's height on the assumption that window is the bar, a ~26px strip.
+The harness anchors to a full-size `FloatingWindow`, so that subtraction eats
+the screen and every popup clamps to the 120px floor. Popup **sizing and
+placement**, and outside-click dismissal, are only meaningful against the real
+bar. Logic, state and churn all validate fine in the sandbox.
+
+`delegateCreations` on the widget root is the churn probe: if it climbs while
+windows are merely changing title, the incremental sync has regressed.

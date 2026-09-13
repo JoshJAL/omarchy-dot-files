@@ -1,10 +1,12 @@
 import QtQuick
 import QtQuick.Layouts
+import QtQml.Models
 import Quickshell
 import Quickshell.Hyprland
 import qs.Commons
 import qs.Ui
 import "WindowModel.js" as WindowModel
+import "MenuModel.js" as MenuModel
 import "Dispatch.js" as Dispatch
 
 // joshjal.taskbar -- one button per open window on THIS monitor.
@@ -28,9 +30,29 @@ BarWidget {
   readonly property var classIconOverrides: root.setting("classIconOverrides", ({}))
   readonly property bool previewsEnabled: root.previewDelay >= 0
 
-  // Invalidates the `windows` binding for churn that doesn't change the
-  // identity of Hyprland.toplevels.values. Only ever bumped from a timer.
+  // ---- the model.
+  //
+  // A ListModel, not a JS array, so delegates persist. Assigning a fresh array
+  // to a Repeater destroys and recreates EVERY delegate, and the events that
+  // drive a rebuild include windowtitlev2 -- which fires every time a terminal
+  // changes its title. That churn reloaded every icon and broke hover identity.
+  //
+  // Roles are primitives only. A HyprlandToplevel in a model role becomes a
+  // dangling pointer and segfaults QQmlListModel::data; see WindowModel.row().
+  ListModel { id: windowModel }
+  readonly property int windowCount: windowModel.count
+
+  // Bumped only when a sync actually changed something, so a no-op sync wakes
+  // no bindings.
   property int modelRevision: 0
+
+  // address -> live HyprlandToplevel, for the one consumer that needs the real
+  // object (the preview's capture source). Deliberately off the model.
+  property var toplevelByAddress: ({})
+
+  // Churn probe. If this climbs while windows are merely changing title, the
+  // incremental sync has regressed. Surfaced in the sandbox harness.
+  property int delegateCreations: 0
 
   readonly property var qsScreen: root.QsWindow.window ? root.QsWindow.window.screen : null
 
@@ -54,25 +76,9 @@ BarWidget {
   }
 
   // address -> first-seen sequence, so icons keep their slot when Hyprland
-  // reorders its client list. Mutated in place on purpose: invalidation is
-  // driven by modelRevision, not by reassigning this object.
+  // reorders its client list. Mutated in place on purpose.
   property var orderSeq: ({})
   property int orderNext: 0
-
-  readonly property var windows: {
-    var dep = root.modelRevision
-    var values = Hyprland.toplevels.values
-    return WindowModel.forMonitor(values, root.monitorId, root.includeSpecial, root.orderSeq)
-  }
-
-  // Icons shrink as the count grows, down to a floor; past that the row is
-  // capped and the remainder goes behind a "+N" chip (phase 7).
-  readonly property int effectiveIconSize: {
-    var n = root.windows.length
-    if (n <= 8) return root.iconSize
-    var shrunk = Math.round(root.iconSize - (n - 8) * 0.5)
-    return Math.max(root.iconSizeMin, shrunk)
-  }
 
   function ensureOrder(values) {
     var seen = {}
@@ -83,92 +89,140 @@ BarWidget {
       seen[addr] = true
       if (root.orderSeq[addr] === undefined) root.orderSeq[addr] = root.orderNext++
     }
-    // Drop bookkeeping for windows that are gone.
     for (var key in root.orderSeq) if (!seen[key]) delete root.orderSeq[key]
+  }
+
+  // Index -> address, for the sandbox harness (no pointer synthesis is
+  // available on this machine, so clicks are driven through the API).
+  function addressAt(i) {
+    return (i >= 0 && i < windowModel.count) ? windowModel.get(i).address : ""
+  }
+
+  function entryFor(address) {
+    for (var i = 0; i < windowModel.count; i++) {
+      var r = windowModel.get(i)
+      if (r.address === address) return r
+    }
+    return null
   }
 
   function refresh() {
     var values = Hyprland.toplevels.values
     root.ensureOrder(values)
-    // Some toplevels arrive before their Hyprland IPC blob does, leaving them
+    // Toplevels can arrive before their Hyprland IPC blob does, leaving them
     // with no monitor or workspace. They would be dropped from every bar, so
-    // ask for a refresh rather than lose them. Guarded against looping: the
-    // retry only fires while something is actually still unplaced.
+    // ask for a refresh rather than lose them. The retry only fires while
+    // something is actually still unplaced, so it cannot spin.
     if (WindowModel.pendingCount(values) > 0) pendingRetry.restart()
-    root.modelRevision++
+
+    root.toplevelByAddress = WindowModel.toplevelMap(values)
+
+    var next = WindowModel.forMonitor(values, root.monitorId, root.includeSpecial, root.orderSeq)
+    if (WindowModel.syncModel(windowModel, next)) root.modelRevision++
+
+    root.syncHoverToplevel()
+    root.reconcileAfterSync()
   }
 
-  // ---- actions.
+  // Delegate persistence means nothing clears stale state for us any more, so
+  // every address we are holding on to is re-checked against the live model.
+  function reconcileAfterSync() {
+    if (root.hoverAddress && !root.toplevelByAddress[root.hoverAddress]) root.closePreview()
+    if (root.pendingAddress && !root.toplevelByAddress[root.pendingAddress]) {
+      root.pendingTarget = null
+      root.pendingAddress = ""
+      hoverTimer.stop()
+    }
+    if (root.previewSuppressedAddress && !root.toplevelByAddress[root.previewSuppressedAddress])
+      root.previewSuppressedAddress = ""
+    if (root.menuOpen && root.menuAddress && !root.toplevelByAddress[root.menuAddress]) root.close()
+    if (root.overflowOpen && root.overflowCount <= 0) root.overflowOpen = false
+  }
+
+  // ---- sizing.
+  //
+  // Icons shrink as the count grows. slotSize has to shrink with them:
+  // BarIconButton.fixedWidth is slotSize, independent of the drawn glyph, so
+  // shrinking the icon alone narrows nothing and the row stays the same width.
+  readonly property int effectiveIconSize: {
+    var n = root.windowCount
+    if (n <= 8) return root.iconSize
+    return Math.max(root.iconSizeMin, Math.round(root.iconSize - (n - 8) * 0.5))
+  }
+  readonly property int effectiveSlotSize:
+    Math.max(root.iconSizeMin + Style.space(6),
+             Style.bar.iconSlot - (root.iconSize - root.effectiveIconSize))
+
+  // maxIcons is a count the user sets; 0 = unlimited. A plugin cannot measure
+  // the room it has -- ModuleSlot asks the widget for its implicitWidth, so the
+  // constraint only ever flows upward, and PluginBarApi carries no geometry.
+  readonly property int visibleCount: {
+    var n = root.windowCount
+    if (root.maxIcons <= 0 || n <= root.maxIcons) return n
+    return Math.max(1, root.maxIcons)
+  }
+  readonly property int overflowCount: Math.max(0, root.windowCount - root.visibleCount)
+
+  // ---- actions. All keyed by address.
   // Hyprland.dispatch() goes down the IPC socket directly: no shell, no
-  // quoting. Every form here was validated against this Hyprland (0.56.2)
-  // before being wired up.
-  function focusWindow(entry) {
-    if (!entry) return
-    Hyprland.dispatch(Dispatch.focusWindow(entry.address))
+  // quoting. Every form was validated against this Hyprland (0.56.2).
+  function focusWindow(address) {
+    if (address) Hyprland.dispatch(Dispatch.focusWindow(address))
+  }
+  function closeWindow(address) {
+    if (address) Hyprland.dispatch(Dispatch.closeWindow(address))
   }
 
-  function closeWindow(entry) {
-    if (!entry) return
-    Hyprland.dispatch(Dispatch.closeWindow(entry.address))
-  }
-
-  function toggleFloating(entry) {
-    if (!entry) return
-    Hyprland.dispatch(Dispatch.toggleFloating(entry.address))
-  }
-
-  function moveToWorkspace(entry, workspaceId) {
-    if (!entry) return
-    Hyprland.dispatch(Dispatch.moveToWorkspace(entry.address, workspaceId, false))
-  }
-
-  function moveToMonitor(entry, target) {
-    if (!entry || !target) return
-    Hyprland.dispatch(Dispatch.moveToWorkspace(entry.address, target.workspaceId, false))
-  }
-
-  // Computed on demand (when the menu opens), not bound -- same re-entrancy
-  // rule as resolveMonitor().
+  // Computed on demand, never bound -- same re-entrancy rule as resolveMonitor().
+  // Safe here because it runs in a user-input callstack, not onRawEvent.
   function otherMonitors() {
     return Dispatch.otherMonitors(Hyprland.monitors.values, root.monitorId)
   }
 
   // ---- hover preview state machine.
-  //
-  // The hovered window is tracked by ADDRESS and the entry is derived from the
-  // live model, never stored. Storing it meant writing back into `windows`
-  // from inside onWindowsChanged to keep the caption fresh, which QML flagged
-  // as a binding loop. Deriving it also makes the "window closed while its
-  // preview was open" case fall out for free: the lookup returns null and the
-  // card's `open` binding goes false on its own.
   property var hoverTarget: null
   property string hoverAddress: ""
   property var pendingTarget: null
   property string pendingAddress: ""
   property bool previewOpen: false
-  property bool menuOpen: false
+
+  // Set on click so the preview cannot immediately re-latch while the pointer
+  // is still sitting on the icon it just clicked.
+  property string previewSuppressedAddress: ""
 
   readonly property var hoverEntry: {
+    var dep = root.modelRevision
     if (!root.hoverAddress) return null
-    var list = root.windows
-    for (var i = 0; i < list.length; i++) if (list[i].address === root.hoverAddress) return list[i]
-    return null
+    return root.entryFor(root.hoverAddress)
   }
 
-  function requestPreview(button, entry) {
-    if (!root.previewsEnabled || root.menuOpen || !entry) return
+  // Guarded plain property, not a binding: a binding would rewrite
+  // ScreencopyView.captureSource on every 40ms event burst, tearing the capture
+  // session down and restarting it while the user is looking at it.
+  property var hoverToplevel: null
+  function syncHoverToplevel() {
+    var tl = root.hoverAddress ? (root.toplevelByAddress[root.hoverAddress] || null) : null
+    if (root.hoverToplevel !== tl) root.hoverToplevel = tl
+  }
+  onHoverAddressChanged: root.syncHoverToplevel()
+
+  function requestPreview(button, address) {
+    if (!root.previewsEnabled || root.menuOpen || !address) return
+    if (address === root.previewSuppressedAddress) return
+    root.previewSuppressedAddress = ""
     if (root.previewOpen) {
       // Already showing: slide straight to the new window, no second delay.
       root.hoverTarget = button
-      root.hoverAddress = entry.address
+      root.hoverAddress = address
       return
     }
     root.pendingTarget = button
-    root.pendingAddress = entry.address
+    root.pendingAddress = address
     hoverTimer.restart()
   }
 
-  function cancelPreview(button) {
+  function cancelPreview(button, address) {
+    if (address && address === root.previewSuppressedAddress) root.previewSuppressedAddress = ""
     if (root.pendingTarget === button) {
       root.pendingTarget = null
       root.pendingAddress = ""
@@ -183,59 +237,145 @@ BarWidget {
     root.hoverAddress = ""
   }
 
-  // Still-hovered means: the pointer is on the button, or it has travelled
-  // into the card itself.
+  // Called first on every click, before the action. Without this the card
+  // survives the click: previewStillWanted() stays true while the pointer is on
+  // the button, and any resulting model change used to re-target it instantly.
+  function dismissPreviewForClick(address) {
+    root.previewSuppressedAddress = String(address || "")
+    hoverTimer.stop()
+    closeTimer.stop()
+    root.pendingTarget = null
+    root.pendingAddress = ""
+    root.closePreview()
+    if (root.previewSuppressedAddress) suppressionWatchdog.restart()
+  }
+
   function previewStillWanted() {
     if (preview.containsMouse) return true
     return root.hoverTarget !== null && root.hoverTarget.tooltipHovered === true
   }
 
-  function openMenu(button, entry) {}
+  // ---- context menu state. Everything is snapshotted when the menu opens so
+  // the rows cannot mutate under a stationary cursor mid-interaction.
+  property bool menuOpen: false
+  property var menuAnchor: null
+  property string menuAddress: ""
+  property string menuTitle: ""
+  property int menuWorkspaceId: 0
+  property bool menuFloating: false
+  property var menuMonitors: []
+  property int menuLevel: 0
+  property bool menuLevelSettling: false
 
-  Timer {
-    id: hoverTimer
-    interval: Math.max(0, root.previewDelay)
-    onTriggered: {
-      if (!root.pendingTarget || root.pendingTarget.tooltipHovered !== true) {
-        root.pendingTarget = null
-        root.pendingAddress = ""
-        return
-      }
-      root.hoverTarget = root.pendingTarget
-      root.hoverAddress = root.pendingAddress
-      root.pendingTarget = null
-      root.pendingAddress = ""
-      root.previewOpen = true
-    }
+  // Captured BEFORE close(), because close() destroys the row delegate and its
+  // ids stop resolving.
+  property string pendingActionKind: ""
+  property string pendingActionAddress: ""
+  property int pendingActionWorkspace: 0
+
+  readonly property var currentMenuRows: root.menuLevel === 1
+    ? MenuModel.workspaceRows(root.menuWorkspaceId)
+    : MenuModel.rootRows({ floating: root.menuFloating, monitors: root.menuMonitors })
+
+  // PopupCard.close() calls owner.close(); the menu card sets owner: root.
+  function close() { root.menuOpen = false }
+
+  function openMenu(button, address) {
+    var addr = String(address || "")
+    if (!addr) return
+    var entry = root.entryFor(addr)
+    if (!entry) return
+
+    root.menuMonitors = root.otherMonitors()
+    root.menuAddress = addr
+    root.menuTitle = entry.title
+    root.menuWorkspaceId = entry.workspaceId
+    root.menuFloating = entry.floating
+
+    root.resetMenuLevel()
+    root.menuAnchor = button
+    root.menuOpen = true
   }
 
-  // Grace period so the pointer can cross the gap from button to card without
-  // the card vanishing underneath it.
-  Timer {
-    id: closeTimer
-    interval: 160
-    onTriggered: if (!root.previewStillWanted()) root.closePreview()
+  function resetMenuLevel() {
+    root.menuLevel = 0
+    root.menuLevelSettling = false
+    menuSettleTimer.stop()
   }
 
-  // Wayland drops leave events when a surface appears under the cursor, so a
-  // poll is the only reliable way to notice the pointer has gone. Bar.qml
-  // carries the same watchdog for its own tooltips.
-  Timer {
-    interval: 120
-    repeat: true
-    running: root.previewOpen
-    onTriggered: if (!root.previewStillWanted()) closeTimer.restart()
+  // A level change rebuilds the rows synchronously under a cursor that has not
+  // moved, so a second click would fire whatever row took that spot. "Move to
+  // workspace" is row 2 of the root level and workspace "2" is row 2 of the
+  // submenu, at the same y -- without this a stray double-click silently moves
+  // the window.
+  function settleMenuLevel() {
+    root.menuLevelSettling = true
+    menuSettleTimer.restart()
   }
+  function enterMenuLevel(level) { root.menuLevel = level; root.settleMenuLevel() }
+  function leaveMenuLevel() { root.menuLevel = 0; root.settleMenuLevel() }
+
+  function requestMenuAction(kind, workspaceId) {
+    root.pendingActionKind = String(kind)
+    root.pendingActionAddress = root.menuAddress
+    root.pendingActionWorkspace = Number(workspaceId || 0)
+    root.close()
+  }
+
+  // Runs once the card has actually gone (end of its 140ms fade), not merely
+  // once `open` went false. HyprlandFocusGrab.active flips immediately but the
+  // compositor-side teardown is an async round trip, and dispatching a focus or
+  // move while the grab is still live can land focus on the grab owner or
+  // bounce it back to the bar.
+  function runPendingMenuAction() {
+    var kind = root.pendingActionKind
+    if (!kind) return
+    var addr = root.pendingActionAddress
+    var ws = root.pendingActionWorkspace
+    root.pendingActionKind = ""
+    root.pendingActionAddress = ""
+    root.pendingActionWorkspace = 0
+    if (!addr) return
+
+    if (kind === "close") Hyprland.dispatch(Dispatch.closeWindow(addr))
+    else if (kind === "float") Hyprland.dispatch(Dispatch.toggleFloating(addr))
+    // Follows, matching SUPER+SHIFT+n.
+    else if (kind === "workspace") Hyprland.dispatch(Dispatch.moveToWorkspace(addr, ws, true))
+    // Does NOT follow: the window becomes visible on the other screen anyway,
+    // and following would yank focus across monitors.
+    else if (kind === "monitor") Hyprland.dispatch(Dispatch.moveToWorkspace(addr, ws, false))
+  }
+
+  onMenuOpenChanged: {
+    if (root.menuOpen) root.closePreview()
+    else root.previewSuppressedAddress = ""
+  }
+
+  // ---- overflow
+  property bool overflowOpen: false
+  // Declarative, not left to reconcileAfterSync(): that only runs on Hyprland
+  // events, so changing maxIcons alone would leave the flag set and the chip
+  // needing two clicks to reopen.
+  onOverflowCountChanged: if (root.overflowCount <= 0) root.overflowOpen = false
+
 
   implicitWidth: root.vertical ? root.barSize : layout.implicitWidth
   implicitHeight: root.vertical ? layout.implicitHeight : root.barSize
-  visible: root.windows.length > 0
+  visible: root.windowCount > 0
 
   Component.onCompleted: { root.resolveMonitor(); root.refresh() }
-  // Deferred through the coalesce timer: bumping modelRevision straight from
-  // a change handler that `windows` depends on is a binding loop.
   onQsScreenChanged: coalesce.restart()
+  // Deferred through the coalesce timer: bumping modelRevision straight from a
+  // change handler that the model depends on is a binding loop.
   onMonitorIdChanged: coalesce.restart()
+
+  // Clears suppression when the pointer leaves the widget entirely. A
+  // HoverHandler is a pointer handler, not a MouseArea, so it does not block
+  // hover delivery to the buttons underneath.
+  HoverHandler {
+    id: widgetHover
+    onHoveredChanged: if (!hovered) root.previewSuppressedAddress = ""
+  }
 
   // Set by onRawEvent, acted on by the coalesce timer. The handler itself must
   // never touch Hyprland state or any property a binding reacts to.
@@ -257,9 +397,9 @@ BarWidget {
         break
       case "changefloatingmode":
         // Quickshell's own toplevel-refresh event set omits this one, so
-        // lastIpcObject.floating goes stale after a float toggle. The refresh
-        // is deferred rather than called here: refreshToplevels() from inside
-        // the event handler is the same re-entrancy that crashed the shell.
+        // lastIpcObject.floating goes stale after a float toggle. Deferred
+        // rather than called here: refreshToplevels() from inside the event
+        // handler is the same re-entrancy that crashed the shell.
         root.needsToplevelRefresh = true
         coalesce.restart()
         break
@@ -285,14 +425,12 @@ BarWidget {
     function onValuesChanged() { coalesce.restart() }
   }
 
-  // Hyprland emits bursts (openwindow + activewindowv2 + workspace within the
-  // same millisecond); rebuilding once per burst keeps the model cheap.
   Timer {
     id: coalesce
     interval: 40
     onTriggered: {
-      // Everything that touches Hyprland state happens here, on the event
-      // loop, never inside the IPC read callstack.
+      // Everything that touches Hyprland state happens here, on the event loop,
+      // never inside the IPC read callstack.
       if (root.needsToplevelRefresh) {
         root.needsToplevelRefresh = false
         Hyprland.refreshToplevels()
@@ -310,11 +448,69 @@ BarWidget {
     interval: 200
     onTriggered: {
       Hyprland.refreshToplevels()
-      Qt.callLater(function () {
-        root.ensureOrder(Hyprland.toplevels.values)
-        root.modelRevision++
-      })
+      Qt.callLater(function () { root.refresh() })
     }
+  }
+
+  Timer {
+    id: hoverTimer
+    interval: Math.max(0, root.previewDelay)
+    onTriggered: {
+      if (!root.pendingTarget || root.pendingTarget.tooltipHovered !== true) {
+        root.pendingTarget = null
+        root.pendingAddress = ""
+        return
+      }
+      root.hoverTarget = root.pendingTarget
+      root.hoverAddress = root.pendingAddress
+      root.pendingTarget = null
+      root.pendingAddress = ""
+      root.previewOpen = true
+    }
+  }
+
+  // Grace period so the pointer can cross the gap from button to card.
+  Timer {
+    id: closeTimer
+    interval: 160
+    onTriggered: if (!root.previewStillWanted()) root.closePreview()
+  }
+
+  // Wayland drops leave events when a surface appears under the cursor, so a
+  // poll is the only reliable way to notice the pointer has gone.
+  Timer {
+    interval: 120
+    repeat: true
+    running: root.previewOpen
+    onTriggered: if (!root.previewStillWanted()) closeTimer.restart()
+  }
+
+  // Backstop for the same lost-leave-event problem: without it a dropped leave
+  // could suppress previews on one icon forever. Timing out is harmless --
+  // opening needs a fresh hover transition, so a pointer still parked on the
+  // icon gets nothing.
+  Timer {
+    id: suppressionWatchdog
+    interval: 4000
+    onTriggered: root.previewSuppressedAddress = ""
+  }
+
+  Timer {
+    id: menuSettleTimer
+    interval: 250
+    onTriggered: root.menuLevelSettling = false
+  }
+
+  // PopupCard.close() calls owner.close(). The owner must never be the card
+  // itself: "close" in card is true, so card.close() would call itself until
+  // the stack blew.
+  QtObject {
+    id: previewOwner
+    function close() { root.closePreview() }
+  }
+  QtObject {
+    id: overflowOwner
+    function close() { root.overflowOpen = false }
   }
 
   PreviewBarShim {
@@ -326,30 +522,70 @@ BarWidget {
     id: preview
     host: root
     entry: root.hoverEntry
+    toplevel: root.hoverToplevel
     // Anchoring to one of our own buttons is what keeps the card on the right
     // screen: PopupCard derives popupScreen from anchorItem.QsWindow.window.
     anchorItem: root.hoverTarget ? root.hoverTarget : root
     bar: previewBar
-    owner: preview
+    owner: previewOwner
     open: root.previewOpen && root.hoverTarget !== null && root.hoverEntry !== null
+  }
+
+  TaskMenu {
+    id: taskMenu
+    host: root
+    anchorItem: root.menuAnchor ? root.menuAnchor : root
+    bar: root.bar
+    owner: root
+    open: root.menuOpen
+  }
+
+  OverflowCard {
+    id: overflowCard
+    host: root
+    model: windowModel
+    anchorItem: overflowChip
+    bar: root.bar
+    owner: overflowOwner
+    open: root.overflowOpen && root.overflowCount > 0
   }
 
   GridLayout {
     id: layout
     anchors.fill: parent
-    columns: root.vertical ? 1 : Math.max(1, root.windows.length)
+    columns: root.vertical ? 1 : Math.max(1, root.visibleCount + 1)
     columnSpacing: 0
     rowSpacing: 0
 
     Repeater {
-      model: root.windows
+      model: windowModel
 
+      // address/title/appClass/urgent/activated/index are required properties
+      // on TaskButton and are filled from the model roles automatically.
       TaskButton {
-        required property var modelData
         bar: root.bar
         host: root
-        entry: modelData
         iconPixelSize: root.effectiveIconSize
+        slotSize: root.effectiveSlotSize
+        visible: index < root.visibleCount
+      }
+    }
+
+    // Declared after the Repeater so it lands last in the row.
+    WidgetButton {
+      id: overflowChip
+      bar: root.bar
+      visible: root.overflowCount > 0
+      labelVisible: true
+      // WidgetButton, not BarIconButton: the latter forces labelVisible false
+      // and renders text through OpticalGlyph in the icon font, where "+3"
+      // would come out as tofu.
+      text: "+" + root.overflowCount
+      fontSize: Style.font.bodySmall
+      horizontalMargin: 5
+      onPressed: function (which) {
+        root.dismissPreviewForClick("")
+        root.overflowOpen = !root.overflowOpen
       }
     }
   }
