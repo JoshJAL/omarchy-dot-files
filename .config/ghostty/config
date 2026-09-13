@@ -37,7 +37,14 @@ keybind = ctrl+a>k=goto_split:top
 keybind = ctrl+a>l=goto_split:right
 keybind = ctrl+a>r=reload_config
 
-
+# Restored from Omarchy 4.0.3 stock, which added these after this file was last
+# ported. They do not collide with the ctrl+a chords above.
+keybind = shift+insert=paste_from_clipboard
+keybind = control+insert=copy_to_clipboard
+keybind = super+control+shift+alt+arrow_down=resize_split:down,100
+keybind = super+control+shift+alt+arrow_up=resize_split:up,100
+keybind = super+control+shift+alt+arrow_left=resize_split:left,100
+keybind = super+control+shift+alt+arrow_right=resize_split:right,100
 
 # Fix general slowness on hyprland (https://github.com/ghostty-org/ghostty/discussions/3224)
 async-backend = epoll
