@@ -35,3 +35,9 @@ export PATH="$PATH:/home/joshjal/.turso"
 
 # Bare dotfiles repo (work-tree = $HOME). See ~/README.md
 alias dotfiles='git --git-dir=$HOME/.dotfiles --work-tree=$HOME'
+
+# mise: never hold back a release for being "too new".
+# mise's minimum_release_age defaults to 24h (supply-chain gate, matches pnpm v11).
+# ~/.config/mise/config.toml already sets it to 0; this env var also beats any
+# project mise.toml or /etc/mise/conf.d drop-in that tries to re-impose it.
+export MISE_MINIMUM_RELEASE_AGE=0
