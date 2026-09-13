@@ -1,0 +1,372 @@
+#!/usr/bin/env bash
+#
+# toolchain-inventory — capture how a machine's toolchain is actually assembled.
+#
+# Run this on the work computer, then bring the report back:
+#     toolchain-inventory > work-machine.md
+#
+# The interesting output is not "what is installed" but PROVENANCE: for each
+# tool, which manager owns the binary that actually wins on PATH. That is the
+# part that differs between machines and the part worth comparing.
+#
+# Written for bash 3.2 (macOS ships 3.2) — no associative arrays, no mapfile.
+# Read-only: installs nothing, changes nothing, touches no network.
+#
+# Usage:
+#   toolchain-inventory              full report to stdout
+#   toolchain-inventory --anon       redact hostname and username too
+#   toolchain-inventory --no-config  skip verbatim config-file dumps
+
+set -uo pipefail   # deliberately NOT -e: missing tools are expected, not fatal
+
+ANON=0
+DUMP_CONFIG=1
+for arg in "$@"; do
+  case "$arg" in
+    --anon)      ANON=1 ;;
+    --no-config) DUMP_CONFIG=0 ;;
+    -h|--help)   sed -n '2,22p' "$0"; exit 0 ;;
+    *) echo "unknown flag: $arg" >&2; exit 2 ;;
+  esac
+done
+
+# ---------------------------------------------------------------------------
+# Redaction. The dotfiles repo is public and this report may get pasted into a
+# chat, so everything that leaves this script goes through scrub() first.
+# ---------------------------------------------------------------------------
+scrub() {
+  sed -E \
+    -e 's/(sk-[A-Za-z0-9_-]{8})[A-Za-z0-9_-]+/\1…REDACTED/g' \
+    -e 's/(gh[pousr]_)[A-Za-z0-9]+/\1…REDACTED/g' \
+    -e 's/(xox[abposr]-)[A-Za-z0-9-]+/\1…REDACTED/g' \
+    -e 's/(AKIA)[A-Z0-9]{12,}/\1…REDACTED/g' \
+    -e 's/(eyJ[A-Za-z0-9_-]{6})[A-Za-z0-9_.-]+/\1…REDACTED-JWT/g' \
+    -e 's/((TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY)[A-Z_]*[=:])[[:space:]]*[^[:space:]]+/\1 …REDACTED/gI' \
+    -e 's#(://[^:/@[:space:]]+):[^@[:space:]]+@#\1:…REDACTED@#g'
+}
+
+anon() {
+  if [ "$ANON" -eq 1 ]; then
+    sed -e "s#$HOME#~#g" -e "s/$(hostname -s 2>/dev/null || echo __nohost__)/HOST/g" \
+        -e "s/\b$(id -un)\b/USER/g"
+  else
+    sed -e "s#$HOME#~#g"
+  fi
+}
+
+emit() { scrub | anon; }
+
+h1() { printf '\n\n# %s\n' "$1"; }
+h2() { printf '\n## %s\n\n' "$1"; }
+note() { printf '_%s_\n\n' "$1"; }
+
+# have TOOL -> true if on PATH
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# Portable `readlink -f`. BSD readlink lacks -f on older macOS.
+resolve() {
+  p=$1
+  n=0
+  while [ -L "$p" ] && [ "$n" -lt 20 ]; do
+    t=$(readlink "$p")
+    case "$t" in
+      /*) p=$t ;;
+      *)  p=$(dirname "$p")/$t ;;
+    esac
+    n=$((n + 1))
+  done
+  # normalise ../ without requiring realpath
+  (cd "$(dirname "$p")" 2>/dev/null && printf '%s/%s\n' "$(pwd -P)" "$(basename "$p")") \
+    || printf '%s\n' "$p"
+}
+
+# ---------------------------------------------------------------------------
+# owner_of PATH -> which manager put this binary here.
+# Path-based inference first (fast, works everywhere), then the OS package
+# database as a fallback for anything under /usr.
+# ---------------------------------------------------------------------------
+owner_of() {
+  b=$1
+  case "$b" in
+    */mise/installs/*|*/mise/shims/*) echo "mise" ; return ;;
+    */.asdf/*)                        echo "asdf" ; return ;;
+    */.nvm/*)                         echo "nvm" ; return ;;
+    */.volta/*)                       echo "volta" ; return ;;
+    */.rbenv/*)                       echo "rbenv" ; return ;;
+    */.pyenv/*)                       echo "pyenv" ; return ;;
+    */.sdkman/*)                      echo "sdkman" ; return ;;
+    */.cargo/bin/*)                   echo "cargo/rustup" ; return ;;
+    */.bun/bin/*)                     echo "bun (self-install)" ; return ;;
+    */.deno/bin/*)                    echo "deno (self-install)" ; return ;;
+    */.local/pipx/*)                  echo "pipx" ; return ;;
+    /nix/store/*)                     echo "nix" ; return ;;
+    /opt/homebrew/*|/usr/local/Cellar/*|/home/linuxbrew/*) echo "homebrew" ; return ;;
+    /Applications/*)                  echo "macOS app bundle" ; return ;;
+    */flatpak/exports/*)              echo "flatpak" ; return ;;
+    /snap/*)                          echo "snap" ; return ;;
+  esac
+
+  # Fall back to the system package database.
+  if have pacman; then
+    o=$(pacman -Qo "$b" 2>/dev/null | sed -E 's/.* is owned by //')
+    [ -n "$o" ] && { echo "pacman ($o)"; return; }
+  elif have dpkg; then
+    o=$(dpkg -S "$b" 2>/dev/null | cut -d: -f1 | head -1)
+    [ -n "$o" ] && { echo "apt/dpkg ($o)"; return; }
+  elif have rpm; then
+    o=$(rpm -qf "$b" 2>/dev/null | head -1)
+    [ -n "$o" ] && { echo "rpm ($o)"; return; }
+  fi
+
+  case "$b" in
+    /usr/bin/*|/bin/*|/usr/sbin/*) echo "OS base" ;;
+    "$HOME"/*)                     echo "manual (user)" ;;
+    *)                             echo "manual/unknown" ;;
+  esac
+}
+
+# version TOOL -> a single-line version string, best effort
+version_of() {
+  case "$1" in
+    java)    "$1" -version 2>&1 | head -1 ;;
+    go)      "$1" version 2>/dev/null ;;
+    docker)  "$1" --version 2>/dev/null ;;
+    # pacman prints a blank line then ASCII art; grab the real version line.
+    pacman)  "$1" --version 2>/dev/null | grep -m1 -oE 'Pacman v[0-9.]+.*' ;;
+    # `dotnet --version` errors out when only the runtime (no SDK) is present.
+    dotnet)  { "$1" --list-sdks 2>/dev/null | tail -1 | sed 's/^/sdk /'
+               "$1" --list-runtimes 2>/dev/null | tail -1 | sed 's/^/runtime /'
+             } | paste -sd' ' - ;;
+    nvm|sdk) echo "(shell function)" ;;
+    *)       "$1" --version 2>/dev/null | head -1 ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+{
+h1 "Toolchain inventory"
+printf '_Generated %s by toolchain-inventory_\n' "$(date '+%Y-%m-%d %H:%M %Z')"
+
+# --- machine ---------------------------------------------------------------
+h2 "Machine"
+printf '| Field | Value |\n|---|---|\n'
+printf '| OS | %s |\n' "$(uname -s)"
+printf '| Kernel | %s |\n' "$(uname -r)"
+printf '| Arch | %s |\n' "$(uname -m)"
+if [ "$(uname -s)" = "Darwin" ]; then
+  printf '| macOS | %s (%s) |\n' "$(sw_vers -productVersion 2>/dev/null)" "$(sw_vers -buildVersion 2>/dev/null)"
+  printf '| Rosetta | %s |\n' "$(sysctl -n sysctl.proc_translated 2>/dev/null || echo n/a)"
+elif [ -r /etc/os-release ]; then
+  printf '| Distro | %s |\n' "$(. /etc/os-release; echo "${PRETTY_NAME:-unknown}")"
+fi
+printf '| Host | %s |\n' "$(hostname -s 2>/dev/null || echo unknown)"
+printf '| Shell | %s |\n' "${SHELL:-unknown}"
+printf '| Bash | %s |\n' "${BASH_VERSION:-n/a}"
+
+# --- PATH ------------------------------------------------------------------
+h2 "PATH, in precedence order"
+note "Earlier entries win. This ordering is the whole story for which manager's copy of a tool you actually run."
+printf '```\n'
+echo "$PATH" | tr ':' '\n' | grep -n . | sed 's/^/  /'
+printf '```\n'
+dupdirs=$(echo "$PATH" | tr ':' '\n' | grep . | sort | uniq -d)
+if [ -n "$dupdirs" ]; then
+  printf '\n**Directories appearing more than once in PATH** (harmless but a sign of double-sourced init):\n\n```\n'
+  echo "$dupdirs"
+  printf '```\n'
+fi
+
+# --- managers present ------------------------------------------------------
+h2 "Package managers present"
+printf '| Manager | Path | Version |\n|---|---|---|\n'
+for m in \
+  brew port pacman yay paru apt dnf zypper apk emerge \
+  flatpak snap nix nix-env guix \
+  mise asdf nvm fnm volta rbenv pyenv sdkman jenv \
+  npm pnpm yarn bun deno \
+  pip pip3 pipx uv poetry conda mamba \
+  cargo rustup gem bundler go composer luarocks opam stack cabal \
+  dotnet gradle mvn krew helm \
+  docker podman colima nerdctl
+do
+  p=$(command -v "$m" 2>/dev/null) || continue
+  printf '| `%s` | `%s` | %s |\n' "$m" "$p" "$(version_of "$m" | tr -d '|')"
+done
+# sdkman is a shell function, not a binary
+[ -d "${SDKMAN_DIR:-$HOME/.sdkman}" ] && printf '| `sdk` | `%s` | (shell function) |\n' "${SDKMAN_DIR:-$HOME/.sdkman}"
+[ -d "$HOME/.nvm" ] && ! have nvm && printf '| `nvm` | `%s` | (shell function, not on PATH) |\n' "$HOME/.nvm"
+
+# --- provenance: the money section ----------------------------------------
+h2 "Provenance — who owns the binary that wins"
+note "For each tool: the resolved binary, and which manager put it there."
+printf '| Tool | Version | Resolved path | Owner |\n|---|---|---|---|\n'
+for t in \
+  node npm npx pnpm yarn bun deno \
+  python python3 pip3 uv ruff \
+  ruby gem bundle \
+  rustc cargo \
+  go java kotlin scala \
+  dotnet php composer \
+  docker docker-compose podman kubectl helm terraform \
+  git gh glab jq rg fd fzf \
+  aws gcloud az \
+  psql redis-cli sqlite3
+do
+  p=$(command -v "$t" 2>/dev/null) || continue
+  r=$(resolve "$p")
+  printf '| `%s` | %s | `%s` | %s |\n' \
+    "$t" "$(version_of "$t" | tr -d '|' | cut -c1-40)" "$r" "$(owner_of "$r")"
+done
+
+printf '\n'
+note "Shadowed duplicates (same tool provided by more than one manager) — the first line of each group is the one that wins:"
+printf '```\n'
+for t in node npm npx pnpm yarn bun deno python3 pip3 ruby gem go java \
+         dotnet rustc cargo docker kubectl terraform git gh jq psql; do
+  # Walk PATH in order, de-duplicating repeated directories, and keep every
+  # directory that actually holds an executable by this name.
+  hits=$(echo "$PATH" | tr ':' '\n' | awk '!seen[$0]++' | while read -r d; do
+           [ -n "$d" ] && [ -x "$d/$t" ] && [ ! -d "$d/$t" ] && echo "$d/$t"
+         done)
+  n=$(echo "$hits" | grep -c . )
+  [ "${n:-0}" -gt 1 ] || continue
+  # Two PATH entries pointing at the same real file are not a real conflict.
+  distinct=$(echo "$hits" | while read -r hp; do resolve "$hp"; done | sort -u | grep -c .)
+  if [ "$distinct" -gt 1 ]; then echo "$t:  <-- REAL CONFLICT ($distinct distinct binaries)"
+  else echo "$t:  (same file via $n PATH entries, harmless)"; fi
+  echo "$hits" | while read -r hp; do
+    [ -n "$hp" ] || continue
+    r=$(resolve "$hp")
+    short=$(printf '%s' "$hp" | sed "s#^$HOME#~#")
+    printf '    %-56s  %s\n' "$short" "$(owner_of "$r")"
+  done
+done
+printf '```\n'
+
+# --- per-manager contents --------------------------------------------------
+h2 "What each manager is carrying"
+
+if have mise; then
+  printf '### mise\n\n```\n'
+  mise ls 2>/dev/null
+  printf '```\n\n**Active config files:**\n\n```\n'
+  mise config ls 2>/dev/null || mise config 2>/dev/null
+  printf '```\n'
+  printf '\n**Settings that change behaviour:**\n\n```\n'
+  mise settings 2>/dev/null | grep -Ei 'idiomatic|experimental|legacy|activate|shims|python|node' | head -20
+  printf '```\n'
+fi
+
+if have asdf; then
+  printf '\n### asdf\n\n```\n'; asdf plugin list --urls 2>/dev/null; echo; asdf list 2>/dev/null; printf '```\n'
+fi
+
+if have brew; then
+  printf '\n### homebrew\n\n'
+  printf '_Prefix: `%s`_\n\n' "$(brew --prefix 2>/dev/null)"
+  printf 'Leaves (explicitly installed, nothing depends on them):\n\n```\n'
+  brew leaves 2>/dev/null
+  printf '```\n\nCasks:\n\n```\n'
+  brew list --cask 2>/dev/null
+  printf '```\n\nTaps:\n\n```\n'
+  brew tap 2>/dev/null
+  printf '```\n'
+fi
+
+if have pacman; then
+  printf '\n### pacman\n\n```\n'
+  printf 'total:    %s\n' "$(pacman -Q 2>/dev/null | wc -l | tr -d ' ')"
+  printf 'explicit: %s\n' "$(pacman -Qe 2>/dev/null | wc -l | tr -d ' ')"
+  printf 'foreign:  %s\n' "$(pacman -Qm 2>/dev/null | wc -l | tr -d ' ')"
+  printf '```\n\nExplicitly installed, excluding base/base-devel:\n\n```\n'
+  pacman -Qe 2>/dev/null | awk '{print $1}' | paste -sd' ' - | fold -s -w 100
+  printf '```\n'
+fi
+
+if have apt; then
+  printf '\n### apt\n\nManually installed:\n\n```\n'
+  apt-mark showmanual 2>/dev/null | paste -sd' ' - | fold -s -w 100
+  printf '```\n'
+fi
+
+if have flatpak; then
+  printf '\n### flatpak\n\n```\n'; flatpak list --app --columns=application,version,origin 2>/dev/null; printf '```\n'
+fi
+
+if have nix; then
+  printf '\n### nix\n\n```\n'
+  nix profile list 2>/dev/null | head -40 || nix-env -q 2>/dev/null | head -40
+  printf '```\n'
+fi
+
+printf '\n### Language-ecosystem globals\n\n'
+printf 'These are the ones that quietly accumulate and drift between machines.\n\n```\n'
+have npm      && { echo "--- npm -g ---";      npm ls -g --depth=0 2>/dev/null | tail -n +2; }
+have pnpm     && { echo "--- pnpm -g ---";     pnpm ls -g --depth=0 2>/dev/null | tail -n +4; }
+have yarn     && { echo "--- yarn global ---"; yarn global list --depth=0 2>/dev/null; }
+have bun      && { echo "--- bun -g ---";      bun pm ls -g 2>/dev/null; }
+have cargo    && { echo "--- cargo install ---"; cargo install --list 2>/dev/null; }
+have pipx     && { echo "--- pipx ---";        pipx list --short 2>/dev/null; }
+have uv       && { echo "--- uv tool ---";     uv tool list 2>/dev/null; }
+have gem      && { echo "--- gem (user) ---";  gem list --local --no-versions 2>/dev/null | head -40; }
+have go       && { echo "--- go bin ---";      ls "$(go env GOPATH 2>/dev/null)/bin" 2>/dev/null; }
+have composer && { echo "--- composer -g ---"; composer global show --direct 2>/dev/null; }
+have krew     && { echo "--- kubectl krew ---"; kubectl krew list 2>/dev/null; }
+printf '```\n'
+
+# --- shell wiring ----------------------------------------------------------
+h2 "Shell wiring"
+note "Which init file activates which manager — the lines that build the PATH above."
+printf '```\n'
+for f in "$HOME/.zshrc" "$HOME/.zshenv" "$HOME/.zprofile" \
+         "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" \
+         "$HOME/.config/fish/config.fish"; do
+  [ -r "$f" ] || continue
+  hits=$(grep -nEi 'mise|asdf|nvm|rbenv|pyenv|volta|fnm|sdkman|brew shellenv|cargo/env|bun|deno|conda|PATH=' "$f" 2>/dev/null | head -25)
+  [ -n "$hits" ] && { printf '### %s\n' "${f#$HOME/}"; echo "$hits"; echo; }
+done
+printf '```\n'
+
+# --- configs verbatim ------------------------------------------------------
+if [ "$DUMP_CONFIG" -eq 1 ]; then
+  h2 "Config files, verbatim"
+  for f in "$HOME/.config/mise/config.toml" "$HOME/.mise.toml" "$HOME/.tool-versions" \
+           "$HOME/.default-npm-packages" "$HOME/.npmrc" "$HOME/.cargo/config.toml" \
+           "$HOME/.config/containers/containers.conf" "$HOME/Brewfile" "$HOME/.Brewfile"; do
+    [ -r "$f" ] || continue
+    printf '### `%s`\n\n```toml\n' "${f#$HOME/}"
+    cat "$f"
+    printf '```\n\n'
+  done
+fi
+
+# --- containers ------------------------------------------------------------
+h2 "Container runtime"
+if have docker; then
+  printf '```\n'
+  docker version --format 'client: {{.Client.Version}}  server: {{.Server.Version}}' 2>/dev/null \
+    || echo "docker CLI present, daemon not reachable"
+  echo "context: $(docker context show 2>/dev/null)"
+  docker context ls 2>/dev/null
+  printf '```\n'
+  note "If client and server versions differ, or the context is not 'default', the daemon is remote or provided by something other than the CLI's own package — worth noting."
+else
+  note "No docker CLI on PATH."
+fi
+have colima && { printf '\n```\n'; colima status 2>&1 | head -10; printf '```\n'; }
+
+h2 "Notes for the walkthrough"
+cat <<'NOTES'
+Things to compare against the other machine when we go through this:
+
+1. Does one manager own a whole ecosystem, or is it split? (e.g. node from mise
+   but its global packages from a different npm prefix)
+2. Anything in the "shadowed duplicates" list — two copies on PATH is where the
+   confusing bugs come from.
+3. Tools owned by "manual (user)" — those have no upgrade path and no record of
+   how they got there.
+4. Whether the container runtime's client and server come from the same place.
+5. Which init file does the activating, and in what order.
+NOTES
+
+} | emit
