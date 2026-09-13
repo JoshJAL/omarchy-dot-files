@@ -2,8 +2,11 @@
 # Reinstall all after a fresh setup with:
 #   grep -v '^#' ~/.config/omarchy/themes-installed.txt | awk '{print $2}' | xargs -rn1 omarchy theme install
 #
+
+aetheria           https://github.com/JJDizz1L/aetheria
 ash                https://github.com/bjarneo/omarchy-ash-theme
 ayaka              https://github.com/abhijeet-swami/omarchy-ayaka-theme
+bauhaus            https://github.com/mwaltzer/omarchy-bauhaus-theme
 catppuccin-dark    https://github.com/Luquatic/omarchy-catppuccin-dark
 cpunk              https://github.com/stannorbvb-cmd/cpunk
 ghost-pastel       https://github.com/row-huh/omarchy-ghost-pastel-theme
