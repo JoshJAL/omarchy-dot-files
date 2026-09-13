@@ -100,9 +100,19 @@ Add a machine by adding a branch, not by committing a divergent file.
 
 ## What's intentionally NOT tracked
 
-Ignore rules live in [`~/.gitignore`](.gitignore). They sit there rather than in
-`~/.dotfiles/info/exclude` because `.gitignore` is itself tracked, so a fresh clone on a new
-machine is protected immediately; `info/exclude` is local-only and just points at it.
+Ignore rules live in [`~/.gitignore`](.gitignore), which is **deny-by-default**: the whole of
+`$HOME` is ignored, and the un-ignore rules name the handful of paths this repo actually tracks.
+The remote is public and the work-tree is `$HOME`, so this way a stray `dotfiles add -A` can
+never publish a credential dropped by some tool installed months from now.
+
+They sit in `.gitignore` rather than `~/.dotfiles/info/exclude` because `.gitignore` is itself
+tracked, so a fresh clone on a new machine is protected immediately; `info/exclude` is local-only
+and just points at it.
+
+**To track something new:** `dotfiles add -f <path>` (or the `dotfiles-track` alias). A
+`.gitignore` only ever applies to *untracked* files, so once a file is added it stays tracked and
+shows up in `status`/`diff` as normal — adding a matching un-ignore rule is optional
+documentation, not a requirement.
 
 - **Wallpaper / image / video binaries** — kept on disk, just not in git (hundreds of MB).
 - **`~/.config/omarchy/themes/`** — each installed theme is its own upstream git repo, so they
@@ -114,10 +124,12 @@ machine is protected immediately; `info/exclude` is local-only and just points a
   exception: `joshjal.taskbar` is mine, so it *is* tracked (see its README).
 - **`~/.config/omarchy/branding/about.txt`** — rewritten on every shell launch.
 - **`*.bak.*`** — timestamped local backups.
-- **Credentials and machine-local state** — `~/.ssh`, `~/.gnupg`, `~/.npmrc`, `~/.aws`,
-  `~/.config/{gh,glab-cli,1Password,op,stripe,clerk,turso,…}`, agent-CLI auth and transcripts,
-  shell history, browser profiles, `~/.cache`, `~/.local/share` and the `Downloads`-style
-  content dirs. The remote is public, so these are ignored wholesale rather than one at a time.
+- **Everything else in `$HOME`** — credentials, shell history, browser profiles, caches,
+  package-manager state, content directories. Ignored by default rather than one rule at a time.
+  A final "never, under any circumstances" block in `.gitignore` re-ignores key material, `.env`
+  files and anything named `auth.json`/`credentials*`/`*token*.json`; because git takes the last
+  matching rule, that block outranks every un-ignore above it and survives a careless negation
+  added later.
 - **`~/.bashrc` is tracked**, and must stay free of plaintext secrets: it sources
   `~/.config/secrets.env` (untracked, mode 600) for anything that shouldn't be published.
 

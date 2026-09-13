@@ -35,6 +35,9 @@ export PATH="$PATH:/home/joshjal/.turso"
 
 # Bare dotfiles repo (work-tree = $HOME). See ~/README.md
 alias dotfiles='git --git-dir=$HOME/.dotfiles --work-tree=$HOME'
+# ~/.gitignore is deny-by-default, so tracking a NEW file needs -f. Already-tracked
+# files are unaffected by gitignore and keep working with plain `dotfiles add`.
+alias dotfiles-track='git --git-dir=$HOME/.dotfiles --work-tree=$HOME add -f'
 
 # mise: never hold back a release for being "too new".
 # mise's minimum_release_age defaults to 24h (supply-chain gate, matches pnpm v11).

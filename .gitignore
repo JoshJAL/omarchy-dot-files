@@ -1,34 +1,97 @@
-# ~/.gitignore — the work-tree of ~/.dotfiles is $HOME and the remote is PUBLIC.
+# ~/.gitignore — work-tree of ~/.dotfiles is $HOME and the remote is PUBLIC.
+#
+# This file is DENY-BY-DEFAULT: everything in $HOME is ignored, and the
+# un-ignore rules below name the paths this repo actually tracks. A stray
+# `dotfiles add -A` therefore adds nothing it shouldn't, no matter what new
+# tool drops a token in $HOME later.
 #
 # Rules live here rather than in ~/.dotfiles/info/exclude because this file is
-# itself tracked, so the protection travels to every machine that clones the
-# repo. info/exclude is local-only and would leave a fresh machine unprotected.
+# itself tracked, so a fresh clone on another machine is protected immediately.
 #
-# Nothing below is currently tracked; these rules exist so an `-A` style add can
-# never sweep credentials, history or bulk state into a public repo.
+# TO TRACK SOMETHING NEW:
+#     dotfiles add -f <path>      # or: dotfiles-track <path>
+# .gitignore only ever applies to UNTRACKED files, so once a file is added it
+# stays tracked and keeps showing up in status/diff as normal. Adding a rule
+# below is optional documentation, not a requirement.
 
-# ---------------------------------------------------------------- backups ---
-*.bak
-*.bak.*
-*.orig
-*.rej
-*~
+# ---------------------------------------------------------------------------
+# 1. Ignore everything.
+# ---------------------------------------------------------------------------
+/*
 
-# ---------------------------------------------------- secrets & key material ---
-.config/secrets.env
+# ---------------------------------------------------------------------------
+# 2. Re-admit the tracked tree.
+#    A directory must be re-admitted before anything inside it can be.
+# ---------------------------------------------------------------------------
+!/.bashrc
+!/.gitignore
+!/README.md
+!/hypr-quattro-port/
+
+# --- ~/.config -------------------------------------------------------------
+!/.config/
+/.config/*
+!/.config/alacritty/
+!/.config/ghostty/
+!/.config/kitty/
+!/.config/git/
+!/.config/mise/
+!/.config/brave-flags.conf
+!/.config/brave-origin-beta-flags.conf
+!/.config/chrome-flags.conf
+!/.config/chromium-flags.conf
+!/.config/helium-browser-flags.conf
+!/.config/mimeapps.list
+!/.config/starship.toml
+!/.config/xdg-terminals.list
+
+# Hyprland: the .lua config is ours. The leftover .conf files from before the
+# quattro port are kept on disk as reference but deliberately not tracked,
+# except the two that are still live.
+!/.config/hypr/
+/.config/hypr/*.conf
+!/.config/hypr/hyprsunset.conf
+!/.config/hypr/xdph.conf
+
+# Omarchy: our hooks, branding text and the taskbar plugin. Themes are each
+# their own upstream repo (see themes-installed.txt), and `themed/`,
+# `extensions/` and the shipped *.sample hooks are Omarchy's, not ours.
+!/.config/omarchy/
+/.config/omarchy/themes/
+/.config/omarchy/themed/
+/.config/omarchy/extensions/
+/.config/omarchy/hooks/**/*.sample
+/.config/omarchy/branding/about.txt
+/.config/omarchy/branding/screensaver.txt
+/.config/omarchy/plugins/*
+!/.config/omarchy/plugins/joshjal.taskbar/
+
+# --- ~/.local --------------------------------------------------------------
+# ~/.local/bin also holds generated mise wrappers, so name our scripts rather
+# than re-admitting the whole directory.
+!/.local/
+/.local/*
+!/.local/bin/
+/.local/bin/*
+!/.local/bin/keepawake-guard
+!/.local/bin/omarchy-launch-screensaver
+!/.local/bin/zed-launch
+!/.local/share/
+/.local/share/*
+!/.local/share/omarchy-mise-fix/
+
+# ---------------------------------------------------------------------------
+# 3. Never, under any circumstances.
+#    Last match wins in git, so these outrank every un-ignore rule above and
+#    survive a future negation added carelessly.
+# ---------------------------------------------------------------------------
+
+# Secrets and key material
 secrets.env
 *.secrets
 .env
 .env.*
 !.env.example
-
-.ssh/
-.gnupg/
-.pki/
-id_rsa*
-id_ecdsa*
-id_ed25519*
-known_hosts*
 *.pem
 *.key
 *.p12
@@ -36,128 +99,27 @@ known_hosts*
 *.gpg
 *.asc
 *.kbx
+id_rsa*
+id_ecdsa*
+id_ed25519*
 
-# ------------------------------------------- cloud, registry & db credentials ---
-.aws/
-.azure/
-.config/gcloud/
-.kube/
-.docker/
+# Anything that parks an auth token on disk
+**/auth.json
+**/credentials
+**/credentials.*
+**/.credentials.json
+**/*token*.json
 .npmrc
-.yarnrc
 .netrc
 .pypirc
 .pgpass
-.my.cnf
-.cargo/credentials*
-.gem/credentials
 
-# ------------------------------------------------------- password managers ---
-.config/1Password/
-.config/op/
-.config/Bitwarden*/
-
-# ------------------------------------------------ CLI tools that cache tokens ---
-.config/gh/
-.config/glab-cli/
-.config/github-copilot/
-.config/clerk/
-.config/clerk-cli/
-.config/stripe/
-.config/turso/
-.turso/
-.supabase/
-.config/supabase/
-.config/vercel*/
-.local/share/com.vercel.cli/
-.config/opencode/
-.config/configstore/
-.config/Slack/
-.config/obsidian/
-.config/claude-trello/
-.config/taskpilot*/
-.config/herdr/
-.config/com.strapi/
-.config/t3code/
-.config/Ami/
-.ami/
-.copilot/
-.cursor/
-.hermes/
-.pi/
-.t3/
-
-# Agent CLIs: credentials and transcripts, but leave room to track their configs
-# (~/.claude/CLAUDE.md, settings.json, agents/, commands/) by hand.
-.claude.json
-.claude/.credentials.json
-.claude/settings.local.json
-.claude/projects/
-.claude/todos/
-.claude/shell-snapshots/
-.claude/statsig/
-.claude/plugins/cache/
-.codex/auth.json
-.codex/sessions/
-.codex/history.jsonl
-
-# Catch-alls for anything new that parks auth on disk
-**/auth.json
-**/credentials
-**/credentials.json
-**/.credentials.json
-**/*token*.json
-
-# ---------------------------------------------------------------- history ---
-.bash_history
-.zsh_history
-.python_history
-.node_repl_history
-.lesshst
-.wget-hsts
-.sudo_as_admin_successful
-
-# ------------------------------------------------ bulk machine-local state ---
-.cache/
-.local/state/
-.local/share/*
-!.local/share/omarchy-mise-fix/
-.var/
-.npm/
-.bun/
-.cargo/
-.gradle/
-.nv/
-.minecraft/
-.steam/
-.steampath
-.steampid
-.pulse-cookie
-
-# Browser profiles (cookies, sessions, saved passwords) — the *-flags.conf
-# files in ~/.config are tracked and unaffected by these directory rules.
-.mozilla/
-.config/BraveSoftware/
-.config/chromium/
-.config/google-chrome*/
-.config/microsoft-edge*/
-.config/vivaldi*/
-.config/net.imput.helium/
-.config/dconf/
-
-# ------------------------------------------------------ user content dirs ---
-Applications/
-Desktop/
-Documents/
-Downloads/
-Music/
-Pictures/
-Videos/
-Projects/
-Work/
-Windows/
-
-# ------------------------------------------- stray archives and logs in $HOME ---
+# Local backups and stray archives/logs
+*.bak
+*.bak.*
+*.orig
+*.rej
+*~
 *.tar.gz
 *.tgz
 *.zip
