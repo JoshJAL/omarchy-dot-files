@@ -32,6 +32,16 @@ o.bind("SUPER + SHIFT + I", "Color picker", "pkill hyprpicker || hyprpicker -a")
 hl.unbind("SUPER + S") -- Omarchy 4: Toggle scratchpad
 o.bind("SUPER + S", "Random screensaver", os.getenv("HOME") .. "/.local/bin/omarchy-launch-screensaver")
 
+-- Workspace cycling stays on the focused monitor. Omarchy 4 binds these to
+-- e+1/e-1, which walk every open workspace across all displays -- with three
+-- monitors that means Tab can yank focus onto a different screen. "m+1"/"m-1"
+-- are the same thing scoped to the current monitor, and they wrap at the ends.
+hl.unbind("SUPER + TAB") -- Omarchy 4: Next workspace (e+1, all monitors)
+o.bind("SUPER + TAB", "Next workspace on this monitor", hl.dsp.focus({ workspace = "m+1" }))
+
+hl.unbind("SUPER + SHIFT + TAB") -- Omarchy 4: Previous workspace (e-1, all monitors)
+o.bind("SUPER + SHIFT + TAB", "Previous workspace on this monitor", hl.dsp.focus({ workspace = "m-1" }))
+
 -- Dropped from the old config, deliberately:
 --
 --   SUPER+L -> hyprlock. hyprlock is gone in Quattro and Omarchy 4 already
