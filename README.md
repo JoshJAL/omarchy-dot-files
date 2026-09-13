@@ -47,6 +47,7 @@ dotfiles checkout -- .config/hypr/monitors.lua
 | Own shell plugins | `~/.config/omarchy/plugins/joshjal.*` |
 | Terminals | `~/.config/alacritty/`, `~/.config/kitty/`, `~/.config/ghostty/` |
 | Default terminal (xdg-terminal-exec) | `~/.config/xdg-terminals.list` |
+| Default browser + file handlers | `~/.config/mimeapps.list` |
 | Browser launch flags | `~/.config/*-flags.conf` |
 | git, mise, starship | `~/.config/git/`, `~/.config/mise/`, `~/.config/starship.toml` |
 | Personal scripts | `~/.local/bin/` |
@@ -119,9 +120,48 @@ grep -v '^#' ~/.config/omarchy/themes-installed.txt | awk '{print $2}' | xargs -
 > finishes the active theme is whichever one sorted last, not the one you were
 > using. Set it back with `omarchy theme set <name>`.
 
-## Why this is safe alongside `omarchy update`
+## How this holds up alongside `omarchy update`
 
 Omarchy sources its own defaults from `~/.local/share/omarchy/` **first**, then sources user
-files from `~/.config/` **after** — so user settings always win and are never overwritten by an
-update. Migrations only make surgical edits, and `omarchy update` snapshots the system before
-running. This repo adds full version history on top of all that.
+files from `~/.config/` **after**, so ordinary settings win and survive an update. Migrations
+only make surgical edits, and `omarchy update` snapshots the system before running. This repo
+adds full version history on top of all that.
+
+**Major-version upgraders are the exception, and it bit us on Quattro.**
+`omarchy-upgrade-to-quattro` carries a *retire* list: for each legacy `~/.config` file it takes
+the sha256 and, **if the hash matches a known stock default, deletes the file** (leaving a
+`<file>.omarchy-upgrade-to-<release>.<timestamp>.bak`) so a new package-owned system path takes
+over. Only a hash *mismatch* is treated as a user override worth keeping.
+
+That logic cannot tell "never customised" from "customised to a value that happens to equal a
+shipped default". Setting the terminal the supported way — `omarchy default terminal ghostty` —
+produces a file byte-identical to a stock default, so:
+
+- `~/.config/xdg-terminals.list` (`7303fa8d…`) was retired, and
+  `/usr/share/xdg-terminal-exec/hyprland-xdg-terminals.list` (from `omarchy-settings 4.0.3-1`,
+  containing `foot.desktop`) took over. **Super+Return started opening foot on both machines.**
+  Note the desktop-specific `<desktop>-xdg-terminals.list` outranks the plain name within each
+  directory, and `XDG_CURRENT_DESKTOP=Hyprland` makes it match.
+- `~/.config/mimeapps.list` was retired the same way, handing the browser back to chromium.
+
+Two defences are in place:
+
+1. **Hash-distinct files.** `xdg-terminals.list` carries extra comment lines so its hash is no
+   longer a stock default; a future upgrader sees a user override and keeps it. `mimeapps.list`
+   is naturally distinct because it names `helium-browser.desktop`. Comments are ignored by
+   `xdg-terminal-exec`. Beware: re-running `omarchy default terminal ghostty` rewrites the file
+   and drops the comments, putting the hash back on the retire list.
+2. **`.config/omarchy/hooks/post-update.d/keep-default-apps`**, which re-asserts ghostty and
+   helium after every update in case a later release retires them by path rather than by hash.
+
+Verify after any major upgrade — and check the terminal for real rather than trusting the config
+file, since the binding resolves through `xdg-terminal-exec`:
+
+```bash
+omarchy default terminal                  # want: ghostty
+omarchy default browser                   # want: helium-browser.desktop
+xdg-terminal-exec --print-id              # want: com.mitchellh.ghostty.desktop
+ls ~/.config/*.omarchy-upgrade-to-*.bak   # anything here was clobbered; diff it
+```
+
+Reported upstream: see the Quattro retire-list issue on `basecamp/omarchy`.

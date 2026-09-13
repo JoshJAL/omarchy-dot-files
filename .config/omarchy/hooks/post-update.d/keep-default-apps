@@ -1,0 +1,71 @@
+#!/bin/bash
+
+# Re-assert the default terminal (ghostty) and browser (helium) after an update.
+#
+# Omarchy's major-version upgraders carry a "retire" list: for each legacy file
+# under ~/.config they take its sha256 and, IF IT MATCHES A KNOWN STOCK DEFAULT,
+# delete it (leaving <file>.omarchy-upgrade-to-<release>.<ts>.bak) so a new
+# package-owned system path takes over. Only a hash MISMATCH counts as a user
+# override worth keeping.
+#
+# That misfires on a deliberate choice made through Omarchy's own tooling.
+# `omarchy default terminal ghostty` writes a file byte-identical to a stock
+# default, so it hashes as "never customised" and gets retired. Quattro did
+# exactly that: ~/.config/xdg-terminals.list (sha 7303fa8d...) was on the retire
+# list, so it was deleted and /usr/share/xdg-terminal-exec/hyprland-xdg-terminals.list
+# -- shipped by omarchy-settings 4.0.3-1, containing foot.desktop -- took over.
+# Super+Return started opening foot on both machines. ~/.config/mimeapps.list was
+# retired the same way, handing the browser back to chromium.
+#
+# Two defences, both needed:
+#   1. The tracked files carry extra comment lines so their hashes are no longer
+#      stock defaults. A future upgrader sees a user override and keeps them.
+#      Comments are ignored by xdg-terminal-exec and by the mimeapps parser.
+#   2. This hook, in case a later release retires them by path rather than hash.
+#
+# Note `omarchy default terminal ghostty` REWRITES xdg-terminals.list and drops
+# the comments, putting the hash back on the retire list. That is why this hook
+# writes the file itself instead of shelling out to that command.
+
+set -u
+
+terminal_entry="com.mitchellh.ghostty.desktop"
+terminal_list="$HOME/.config/xdg-terminals.list"
+browser_entry="helium-browser.desktop"
+
+# --- Terminal ---------------------------------------------------------------
+# Only meaningful if ghostty is actually installed; otherwise leave whatever
+# xdg-terminal-exec resolves to rather than pointing at a missing entry.
+if [[ -f /usr/share/applications/$terminal_entry ]]; then
+  if [[ ! -f $terminal_list ]] || ! grep -qxF "$terminal_entry" "$terminal_list"; then
+    cat >"$terminal_list" <<-EOF
+	# Terminal emulator preference order for xdg-terminal-exec
+	# The first found and valid terminal will be used
+	# Kept deliberately: ghostty, not foot.
+	# This comment also makes the file hash-distinct so Omarchy upgrades
+	# treat it as a user override instead of retiring it (see quattro).
+	$terminal_entry
+	EOF
+    echo "keep-default-apps: restored ghostty as the default terminal"
+    notify-send -u low "Default terminal restored" "The update had reset it; ghostty is default again" 2>/dev/null || true
+  fi
+fi
+
+# --- Browser ----------------------------------------------------------------
+# `omarchy default browser` does not know about helium (its list is chromium/
+# chrome/brave/brave-origin/edge/firefox/zen), so set it through xdg-settings.
+# $BROWSER is omarchy-launch-browser and shadows xdg-settings' own lookup, hence
+# `env -u BROWSER`. omarchy-launch-webapp already whitelists helium*, so web apps
+# keep working. Skip entirely if the launcher is missing -- helium is a hand-made
+# .desktop pointing at an AppImage, not a package, so it may not exist here.
+if [[ -f $HOME/.local/share/applications/$browser_entry ]]; then
+  current=$(env -u BROWSER xdg-settings get default-web-browser 2>/dev/null || true)
+  if [[ $current != "$browser_entry" ]]; then
+    if env -u BROWSER xdg-settings set default-web-browser "$browser_entry" 2>/dev/null; then
+      echo "keep-default-apps: restored helium as the default browser (was ${current:-unset})"
+      notify-send -u low "Default browser restored" "The update had reset it; helium is default again" 2>/dev/null || true
+    else
+      echo "keep-default-apps: could not set $browser_entry as the default browser"
+    fi
+  fi
+fi
