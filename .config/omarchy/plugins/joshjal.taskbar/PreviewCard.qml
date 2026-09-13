@@ -20,7 +20,13 @@ PopupCard {
   readonly property string title: card.entry ? card.entry.title : ""
   readonly property string appClass: card.entry ? card.entry.appClass : ""
   readonly property int workspaceId: card.entry ? card.entry.workspaceId : 0
-  readonly property var toplevel: card.entry && card.entry.toplevel ? card.entry.toplevel : null
+
+  // Set by the host, not derived from `entry`. The toplevel is deliberately
+  // kept out of the ListModel (a QObject in a model role becomes a dangling
+  // pointer and segfaults QQmlListModel::data), and the host hands it over via
+  // a guarded plain property so captureSource is not rewritten -- and the
+  // capture session torn down and restarted -- on every event burst.
+  property var toplevel: null
   readonly property var waylandHandle: card.toplevel ? card.toplevel.wayland : null
 
   triggerMode: "hover"

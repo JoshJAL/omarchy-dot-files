@@ -1,13 +1,16 @@
 .pragma library
 
-// Pure helpers for turning Hyprland.toplevels into this monitor's window list.
+// Pure helpers for turning Hyprland.toplevels into this monitor's window list,
+// and for syncing that list into a ListModel incrementally.
 //
-// Every field on a HyprlandToplevel is defensively read. The spike turned up
-// toplevels whose `lastIpcObject`, `workspace` and `monitor` were all undefined
-// -- Quickshell surfaces the Wayland handle before the Hyprland IPC blob that
-// describes it has arrived. Those windows must not crash the model or get
-// silently dropped onto no bar at all, so they are held in a pending bucket
-// until a refresh fills them in.
+// Every field on a HyprlandToplevel is defensively read. Toplevels routinely
+// surface before the Hyprland IPC blob that describes them arrives, with
+// `lastIpcObject`, `workspace` and `monitor` all empty -- it happens on every
+// shell start. Those windows must not crash the model or be silently dropped
+// onto no bar at all, hence the `pending` bucket and the caller's retry.
+//
+// NOTHING in here may hold a reference to a HyprlandToplevel that ends up in a
+// ListModel role. See the note on row() below.
 
 function ipcOf(tl) {
   var ipc = tl ? tl.lastIpcObject : null
@@ -36,8 +39,6 @@ function classOf(tl) {
   return String(cls || "")
 }
 
-// A toplevel we cannot yet place: no monitor, or no workspace. Counting these
-// is what lets the widget ask for an IPC refresh instead of losing the window.
 function isPending(tl) {
   return monitorIdOf(tl) === null || workspaceIdOf(tl) === null
 }
@@ -48,12 +49,43 @@ function pendingCount(values) {
   return n
 }
 
-// Build this monitor's list. `orderSeq` maps address -> first-seen sequence so
-// icons keep their position when Hyprland reorders its client list; unknown
-// addresses sort last rather than jumping to the front.
+// The ONLY place a model row is constructed.
+//
+// Two rules, both load-bearing:
+//
+// 1. No QObject. A HyprlandToplevel stored in a ListModel role becomes a
+//    dangling C++ pointer the moment its owner destroys it, and the next read
+//    of that role segfaults inside QQmlListModel::data. Omarchy hit this itself
+//    and documented it in plugins/notifications/Service.qml. The toplevel lives
+//    in a plain JS map on the widget root instead, keyed by address; nothing in
+//    a delegate needs it.
+//
+// 2. Every key, every time, coerced. ListModel fixes each role's type from the
+//    first element inserted -- a null or undefined at that moment poisons the
+//    role for the life of the process, and rows carrying keys the model has
+//    never seen are silently dropped with a warning.
+var ROLES = ["title", "appClass", "workspaceId", "floating", "urgent", "activated", "seq"]
+
+function row(tl, workspaceId, seq) {
+  var ipc = ipcOf(tl)
+  return {
+    address: String(tl.address || ""),
+    title: String(tl.title || ""),
+    appClass: String(classOf(tl) || ""),
+    workspaceId: Number(workspaceId),
+    floating: ipc.floating === true,
+    urgent: tl.urgent === true,
+    activated: tl.activated === true,
+    seq: Number(seq)
+  }
+}
+
+// This monitor's rows, sorted by (workspace, first-seen sequence). `orderSeq`
+// maps address -> sequence so icons keep their slot when Hyprland reorders its
+// client list; unknown addresses sort last rather than jumping to the front.
 function forMonitor(values, monitorId, includeSpecial, orderSeq) {
   var out = []
-  if (monitorId === null || monitorId === undefined) return out
+  if (monitorId === null || monitorId === undefined || Number(monitorId) < 0) return out
 
   for (var i = 0; i < (values ? values.length : 0); i++) {
     var tl = values[i]
@@ -68,20 +100,8 @@ function forMonitor(values, monitorId, includeSpecial, orderSeq) {
     var addr = String(tl.address || "")
     if (!addr) continue
 
-    var ipc = ipcOf(tl)
     var seq = orderSeq && orderSeq[addr] !== undefined ? orderSeq[addr] : Number.MAX_SAFE_INTEGER
-
-    out.push({
-      address: addr,
-      toplevel: tl,
-      workspaceId: wsId,
-      title: String(tl.title || ""),
-      appClass: classOf(tl),
-      floating: ipc.floating === true,
-      urgent: tl.urgent === true,
-      activated: tl.activated === true,
-      seq: seq
-    })
+    out.push(row(tl, wsId, seq))
   }
 
   out.sort(function (a, b) {
@@ -92,12 +112,67 @@ function forMonitor(values, monitorId, includeSpecial, orderSeq) {
   return out
 }
 
-// Addresses present in `values`, for pruning per-address bookkeeping.
-function addressSet(values) {
-  var set = {}
+// Reconcile `model` to `next` in place: remove what's gone, insert what's new,
+// move what's out of order, and setProperty only the fields that actually
+// differ. Delegates for unchanged rows are never destroyed, which is the whole
+// point -- a fresh array assigned to a Repeater rebuilds every delegate, and
+// windowtitlev2 fires on every terminal title change.
+//
+// Returns true if anything changed, so the caller can skip waking bindings on
+// a no-op sync.
+function syncModel(model, next) {
+  var changed = false
+
+  // Removals first, back to front so indices stay valid as we splice.
+  var wanted = {}
+  for (var i = 0; i < next.length; i++) wanted[next[i].address] = true
+  for (var r = model.count - 1; r >= 0; r--) {
+    if (!wanted[model.get(r).address]) {
+      model.remove(r)
+      changed = true
+    }
+  }
+
+  // Then insert / reorder / update, front to back. The inner search starts at
+  // j because everything before it is already settled.
+  for (var j = 0; j < next.length; j++) {
+    var want = next[j]
+    var at = -1
+    for (var k = j; k < model.count; k++) {
+      if (model.get(k).address === want.address) { at = k; break }
+    }
+
+    if (at === -1) {
+      model.insert(j, want)
+      changed = true
+      continue
+    }
+    if (at !== j) {
+      model.move(at, j, 1)
+      changed = true
+    }
+
+    var have = model.get(j)
+    for (var p = 0; p < ROLES.length; p++) {
+      var key = ROLES[p]
+      if (have[key] !== want[key]) {
+        model.setProperty(j, key, want[key])
+        changed = true
+      }
+    }
+  }
+
+  return changed
+}
+
+// address -> toplevel, for the one consumer that genuinely needs the live
+// object (the preview's ScreencopyView captureSource). Kept off the model on
+// purpose; see row().
+function toplevelMap(values) {
+  var map = {}
   for (var i = 0; i < (values ? values.length : 0); i++) {
     var tl = values[i]
-    if (tl && tl.address) set[String(tl.address)] = true
+    if (tl && tl.address) map[String(tl.address)] = tl
   }
-  return set
+  return map
 }
