@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "joshjal.taskbar",
+  "name": "Taskbar",
+  "version": "0.1.0",
+  "author": "joshjal",
+  "license": "MIT",
+  "description": "One icon per open window on this monitor, with a live hover preview",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "barWidget": {
+    "displayName": "Taskbar",
+    "description": "One icon per open window on this monitor, with a live hover preview",
+    "category": "Windows",
+    "allowMultiple": false,
+    "defaultSection": "left"
+  }
+}
