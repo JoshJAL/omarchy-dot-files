@@ -1,2 +1,164 @@
-# Local editor/manual backups — never part of the tracked config.
+# ~/.gitignore — the work-tree of ~/.dotfiles is $HOME and the remote is PUBLIC.
+#
+# Rules live here rather than in ~/.dotfiles/info/exclude because this file is
+# itself tracked, so the protection travels to every machine that clones the
+# repo. info/exclude is local-only and would leave a fresh machine unprotected.
+#
+# Nothing below is currently tracked; these rules exist so an `-A` style add can
+# never sweep credentials, history or bulk state into a public repo.
+
+# ---------------------------------------------------------------- backups ---
 *.bak
+*.bak.*
+*.orig
+*.rej
+*~
+
+# ---------------------------------------------------- secrets & key material ---
+.config/secrets.env
+secrets.env
+*.secrets
+.env
+.env.*
+!.env.example
+
+.ssh/
+.gnupg/
+.pki/
+id_rsa*
+id_ecdsa*
+id_ed25519*
+known_hosts*
+*.pem
+*.key
+*.p12
+*.pfx
+*.gpg
+*.asc
+*.kbx
+
+# ------------------------------------------- cloud, registry & db credentials ---
+.aws/
+.azure/
+.config/gcloud/
+.kube/
+.docker/
+.npmrc
+.yarnrc
+.netrc
+.pypirc
+.pgpass
+.my.cnf
+.cargo/credentials*
+.gem/credentials
+
+# ------------------------------------------------------- password managers ---
+.config/1Password/
+.config/op/
+.config/Bitwarden*/
+
+# ------------------------------------------------ CLI tools that cache tokens ---
+.config/gh/
+.config/glab-cli/
+.config/github-copilot/
+.config/clerk/
+.config/clerk-cli/
+.config/stripe/
+.config/turso/
+.turso/
+.supabase/
+.config/supabase/
+.config/vercel*/
+.local/share/com.vercel.cli/
+.config/opencode/
+.config/configstore/
+.config/Slack/
+.config/obsidian/
+.config/claude-trello/
+.config/taskpilot*/
+.config/herdr/
+.config/com.strapi/
+.config/t3code/
+.config/Ami/
+.ami/
+.copilot/
+.cursor/
+.hermes/
+.pi/
+.t3/
+
+# Agent CLIs: credentials and transcripts, but leave room to track their configs
+# (~/.claude/CLAUDE.md, settings.json, agents/, commands/) by hand.
+.claude.json
+.claude/.credentials.json
+.claude/settings.local.json
+.claude/projects/
+.claude/todos/
+.claude/shell-snapshots/
+.claude/statsig/
+.claude/plugins/cache/
+.codex/auth.json
+.codex/sessions/
+.codex/history.jsonl
+
+# Catch-alls for anything new that parks auth on disk
+**/auth.json
+**/credentials
+**/credentials.json
+**/.credentials.json
+**/*token*.json
+
+# ---------------------------------------------------------------- history ---
+.bash_history
+.zsh_history
+.python_history
+.node_repl_history
+.lesshst
+.wget-hsts
+.sudo_as_admin_successful
+
+# ------------------------------------------------ bulk machine-local state ---
+.cache/
+.local/state/
+.local/share/*
+!.local/share/omarchy-mise-fix/
+.var/
+.npm/
+.bun/
+.cargo/
+.gradle/
+.nv/
+.minecraft/
+.steam/
+.steampath
+.steampid
+.pulse-cookie
+
+# Browser profiles (cookies, sessions, saved passwords) — the *-flags.conf
+# files in ~/.config are tracked and unaffected by these directory rules.
+.mozilla/
+.config/BraveSoftware/
+.config/chromium/
+.config/google-chrome*/
+.config/microsoft-edge*/
+.config/vivaldi*/
+.config/net.imput.helium/
+.config/dconf/
+
+# ------------------------------------------------------ user content dirs ---
+Applications/
+Desktop/
+Documents/
+Downloads/
+Music/
+Pictures/
+Videos/
+Projects/
+Work/
+Windows/
+
+# ------------------------------------------- stray archives and logs in $HOME ---
+*.tar.gz
+*.tgz
+*.zip
+*.log

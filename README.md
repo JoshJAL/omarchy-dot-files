@@ -100,7 +100,9 @@ Add a machine by adding a branch, not by committing a divergent file.
 
 ## What's intentionally NOT tracked
 
-Excludes live in `~/.dotfiles/info/exclude`:
+Ignore rules live in [`~/.gitignore`](.gitignore). They sit there rather than in
+`~/.dotfiles/info/exclude` because `.gitignore` is itself tracked, so a fresh clone on a new
+machine is protected immediately; `info/exclude` is local-only and just points at it.
 
 - **Wallpaper / image / video binaries** — kept on disk, just not in git (hundreds of MB).
 - **`~/.config/omarchy/themes/`** — each installed theme is its own upstream git repo, so they
@@ -112,7 +114,12 @@ Excludes live in `~/.dotfiles/info/exclude`:
   exception: `joshjal.taskbar` is mine, so it *is* tracked (see its README).
 - **`~/.config/omarchy/branding/about.txt`** — rewritten on every shell launch.
 - **`*.bak.*`** — timestamped local backups.
-- **`~/.bashrc`** — kept out of git because it contains plaintext secrets.
+- **Credentials and machine-local state** — `~/.ssh`, `~/.gnupg`, `~/.npmrc`, `~/.aws`,
+  `~/.config/{gh,glab-cli,1Password,op,stripe,clerk,turso,…}`, agent-CLI auth and transcripts,
+  shell history, browser profiles, `~/.cache`, `~/.local/share` and the `Downloads`-style
+  content dirs. The remote is public, so these are ignored wholesale rather than one at a time.
+- **`~/.bashrc` is tracked**, and must stay free of plaintext secrets: it sources
+  `~/.config/secrets.env` (untracked, mode 600) for anything that shouldn't be published.
 
 `status.showUntrackedFiles=no` is set so `dotfiles status` reports only tracked files instead of
 the entire home directory.
