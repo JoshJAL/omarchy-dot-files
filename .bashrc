@@ -29,7 +29,6 @@ SCREENSAVERS=(~/.config/omarchy/branding/screensavers/*.txt)
 cp "${SCREENSAVERS[RANDOM % ${#SCREENSAVERS[@]}]}" ~/.config/omarchy/branding/about.txt
 fastfetch
 export PATH="/usr/local/bin:$PATH"
-export PATH="/usr/local/bin:$PATH"
 
 # Turso
 export PATH="$PATH:/home/joshjal/.turso"
