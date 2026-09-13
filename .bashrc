@@ -23,12 +23,13 @@ source "$OMARCHY_PATH/default/bash/rc"
 [ -r "$HOME/.config/secrets.env" ] && . "$HOME/.config/secrets.env"
 
 export BUN_INSTALL="$HOME/.bun"
-export PATH="$BUN_INSTALL/bin:$PATH"
+# Guarded: .bash_profile sources this file, so an unguarded prepend landed in
+# PATH twice for login shells.
+case ":$PATH:" in *":$BUN_INSTALL/bin:"*) ;; *) export PATH="$BUN_INSTALL/bin:$PATH" ;; esac
 
 SCREENSAVERS=(~/.config/omarchy/branding/screensavers/*.txt)
 cp "${SCREENSAVERS[RANDOM % ${#SCREENSAVERS[@]}]}" ~/.config/omarchy/branding/about.txt
 fastfetch
-export PATH="/usr/local/bin:$PATH"
 
 # Turso
 export PATH="$PATH:/home/joshjal/.turso"
