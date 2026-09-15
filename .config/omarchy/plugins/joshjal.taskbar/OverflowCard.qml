@@ -82,14 +82,14 @@ PopupCard {
           onClicked: function (mouse) {
             if (!card.host) return
             card.host.overflowOpen = false
+            // Anchor any menu to the CHIP, not to this row. PopupCard resolves
+            // its screen from anchorItem.QsWindow.window, and anchoring inside
+            // this popup would nest a popup in a popup and resolve the wrong
+            // surface -- landing the menu on the wrong monitor.
             if (mouse.button === Qt.RightButton) {
-              // Anchor the menu to the CHIP, not to this row. PopupCard resolves
-              // its screen from anchorItem.QsWindow.window, and anchoring inside
-              // this popup would nest a popup in a popup and resolve the wrong
-              // surface -- landing the menu on the wrong monitor.
-              card.host.openMenu(card.anchorItem, overflowRow.address)
+              card.host.runClickAction(card.host.rightClick, card.anchorItem, overflowRow.address)
             } else if (mouse.button === Qt.MiddleButton) {
-              card.host.closeWindow(overflowRow.address)
+              card.host.runClickAction(card.host.middleClick, card.anchorItem, overflowRow.address)
             } else {
               card.host.focusWindow(overflowRow.address)
             }
