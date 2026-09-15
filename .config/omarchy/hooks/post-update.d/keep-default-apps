@@ -33,6 +33,66 @@ terminal_entry="com.mitchellh.ghostty.desktop"
 terminal_list="$HOME/.config/xdg-terminals.list"
 browser_entry="helium-browser.desktop"
 
+# --- Handler-name aliases ----------------------------------------------------
+# The two machines install the same apps under different .desktop NAMES:
+#
+#   helium   packaged helium.desktop here; hand-made helium-browser.desktop
+#            (AppImage) on the other box
+#   t3code   t3code-url-handler.desktop here; t3code.desktop there
+#
+# ~/.config/mimeapps.list is tracked and shared, so it can only name one of
+# each -- and naming one that does not resolve does NOT error. It falls through
+# to whatever else claims the scheme, silently: with helium-browser.desktop
+# missing here, https quietly resolved to brave/chromium.
+#
+# Rather than keep a machine-specific override file outside git, make every
+# name either machine might use resolve on BOTH, by aliasing whichever is
+# present. That also means an app that rewrites mimeapps.list to its own
+# handler name (T3 Code does this on launch) still lands on something real.
+#
+# ~/.local/share/applications is deliberately not tracked -- it is already full
+# of generated webapp entries -- so these aliases cost nothing in the repo.
+# NoDisplay keeps them out of launchers, so no duplicate menu entries.
+apps_dir="$HOME/.local/share/applications"
+
+resolve_desktop() {
+  local name=$1 dir
+  for dir in "$apps_dir" /usr/share/applications; do
+    [[ -f $dir/$name ]] && { printf '%s\n' "$dir/$name"; return 0; }
+  done
+  return 1
+}
+
+ensure_alias() {
+  local want=$1 src found=""
+  shift
+  resolve_desktop "$want" >/dev/null && return 0
+  for src in "$@"; do
+    if found=$(resolve_desktop "$src"); then break; fi
+    found=""
+  done
+  [[ -n $found ]] || return 0
+
+  mkdir -p "$apps_dir"
+  # NoDisplay goes inside [Desktop Entry], not appended at EOF, where it would
+  # land in a trailing [Desktop Action ...] group instead.
+  awk '
+    /^\[Desktop Entry\]/ { print; print "NoDisplay=true"; next }
+    /^NoDisplay=/        { next }
+    { print }
+  ' "$found" >"$apps_dir/$want.tmp" || { rm -f "$apps_dir/$want.tmp"; return 0; }
+  mv "$apps_dir/$want.tmp" "$apps_dir/$want"
+  echo "keep-default-apps: aliased $want -> $(basename "$found")"
+}
+
+ensure_alias helium-browser.desktop helium.desktop
+ensure_alias helium.desktop helium-browser.desktop
+ensure_alias t3code.desktop t3code-url-handler.desktop
+ensure_alias t3code-url-handler.desktop t3code.desktop
+
+command -v update-desktop-database >/dev/null 2>&1 && \
+  update-desktop-database "$apps_dir" 2>/dev/null || true
+
 # --- Terminal ---------------------------------------------------------------
 # Only meaningful if ghostty is actually installed; otherwise leave whatever
 # xdg-terminal-exec resolves to rather than pointing at a missing entry.

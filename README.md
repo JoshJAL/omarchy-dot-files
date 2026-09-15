@@ -196,6 +196,31 @@ Two defences are in place:
 2. **`.config/omarchy/hooks/post-update.d/keep-default-apps`**, which re-asserts ghostty and
    helium after every update in case a later release retires them by path rather than by hash.
 
+### Why `mimeapps.list` can stay shared between both machines
+
+The same apps carry different `.desktop` **names** per machine — helium is a packaged
+`helium.desktop` on the laptop and a hand-made `helium-browser.desktop` (AppImage) on the
+desktop; t3code is `t3code-url-handler.desktop` on the laptop and `t3code.desktop` on the
+desktop. A shared `mimeapps.list` can only name one of each, and naming one that does not
+resolve **fails silently** — it falls through to whatever else claims the scheme, which is how
+`https` quietly ended up on brave/chromium here.
+
+Rather than keep a machine-specific override outside git, `keep-default-apps` aliases every name
+either machine might use, so all of them resolve on both. The alias is a copy of whichever entry
+exists, with `NoDisplay=true` so it never shows up twice in a launcher, written to
+`~/.local/share/applications/` — deliberately untracked, since it is already full of generated
+webapp entries.
+
+Consequences worth knowing:
+
+- `mimeapps.list` is byte-identical on both machines and needs no per-host override, no
+  `skip-worktree`, and no untracked file under `~/.config`.
+- Apps rewrite `mimeapps.list` to register their own handler (T3 Code does this on launch). That
+  is now harmless: whichever name it writes resolves on both machines, so the churn can simply be
+  committed instead of reverted.
+- The hook only runs on `omarchy update`. On a freshly rebuilt machine, run it once by hand:
+  `bash ~/.config/omarchy/hooks/post-update.d/keep-default-apps` — it is idempotent.
+
 Verify after any major upgrade — and check the terminal for real rather than trusting the config
 file, since the binding resolves through `xdg-terminal-exec`:
 
