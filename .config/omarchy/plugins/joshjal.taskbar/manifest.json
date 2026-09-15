@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "joshjal.taskbar",
   "name": "Taskbar",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "joshjal",
   "license": "MIT",
   "description": "One icon per open window on this monitor, with a live hover preview",
@@ -13,6 +13,85 @@
     "description": "One icon per open window on this monitor, with a live hover preview",
     "category": "Windows",
     "allowMultiple": false,
-    "defaultSection": "left"
+    "defaultSection": "left",
+    "defaults": {
+      "iconSize": 14,
+      "iconSizeMin": 10,
+      "includeSpecial": false,
+      "maxIcons": 0,
+      "previewDelay": 320,
+      "previewWidth": 320,
+      "previewHeight": 200,
+      "classIconOverrides": {}
+    },
+    "schema": [
+      {
+        "key": "iconSize",
+        "type": "integer",
+        "label": "Icon size",
+        "description": "Icon size at rest. Icons shrink toward the minimum as more windows open on the monitor.",
+        "min": 8,
+        "max": 32,
+        "step": 1,
+        "defaultValue": 14
+      },
+      {
+        "key": "iconSizeMin",
+        "type": "integer",
+        "label": "Minimum icon size",
+        "description": "Floor for the automatic shrink, so a busy monitor never collapses the icons entirely.",
+        "min": 6,
+        "max": 32,
+        "step": 1,
+        "defaultValue": 10
+      },
+      {
+        "key": "maxIcons",
+        "type": "integer",
+        "label": "Maximum icons",
+        "description": "Windows past this count collapse into a \"+N\" overflow chip. 0 means unlimited.",
+        "min": 0,
+        "max": 40,
+        "step": 1,
+        "defaultValue": 0
+      },
+      {
+        "key": "includeSpecial",
+        "type": "boolean",
+        "label": "Include special workspaces",
+        "description": "Also show windows parked on special workspaces, such as the scratchpad.",
+        "defaultValue": false
+      },
+      {
+        "key": "previewDelay",
+        "type": "integer",
+        "label": "Hover preview delay (ms)",
+        "description": "How long to hover before the live preview opens. Set to -1 to turn previews off entirely.",
+        "min": -1,
+        "max": 2000,
+        "step": 10,
+        "defaultValue": 320
+      },
+      {
+        "key": "previewWidth",
+        "type": "integer",
+        "label": "Preview width (px)",
+        "description": "Width of the live hover preview.",
+        "min": 160,
+        "max": 800,
+        "step": 10,
+        "defaultValue": 320
+      },
+      {
+        "key": "previewHeight",
+        "type": "integer",
+        "label": "Preview max height (px)",
+        "description": "Height cap for the live hover preview; the thumbnail keeps the window's aspect ratio.",
+        "min": 120,
+        "max": 600,
+        "step": 10,
+        "defaultValue": 200
+      }
+    ]
   }
 }
