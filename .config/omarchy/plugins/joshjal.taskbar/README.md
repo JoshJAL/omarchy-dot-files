@@ -23,6 +23,19 @@ All are optional and hot-reload when `shell.json` is saved.
 | `iconSizeMin` | `10` | Floor that icons shrink to as the window count grows. |
 | `maxIcons` | `0` | Show at most this many icons; the rest collapse behind a "+N" chip. `0` = unlimited. A count rather than a width because a plugin cannot measure the room it has — `ModuleSlot` asks the widget for its `implicitWidth`, so the constraint only ever flows upward, and `PluginBarApi` carries no geometry. |
 | `includeSpecial` | `false` | Include scratchpad / special workspaces. |
+| `allOutputs` | `false` | Off, each monitor's taskbar lists only its own windows. On, every taskbar lists every window — so the same window appears on all of them. |
+| `sortBy` | `"workspace"` | `"workspace"` groups by workspace, then by first-seen order. `"creation"` drops the workspace term and orders purely by age, so icons keep their slot when a window changes workspace. |
+| `showTitles` | `false` | Draw the window title beside each icon. Ignored on vertical bars — there is no width to spend on it. |
+| `maxTitleWidth` | `140` | Titles wider than this are elided. Only applies with `showTitles`. |
+| `dimInactive` | `true` | Unfocused windows render at half opacity. `false` renders every icon at full strength. |
+| `middleClick` | `"close"` | Middle-click action: `close`, `bring`, `focus` or `none`. |
+| `rightClick` | `"menu"` | Right-click action: `menu`, `close`, `bring`, `focus` or `none`. `menu` is the context menu below. |
+
+`bring` pulls the window onto the workspace you are already looking at, rather
+than jumping you to wherever it lives. The destination is the active workspace
+of *the monitor whose taskbar you clicked*, since one widget instance exists per
+screen. An unrecognised action string falls through to `focus`, so a typo
+degrades to an ordinary click instead of a dead icon.
 | `classIconOverrides` | `{}` | `{"SomeClass": "icon-name"}` for apps whose window class matches no desktop entry — common for Electron apps and PWAs. |
 
 ## Behavior

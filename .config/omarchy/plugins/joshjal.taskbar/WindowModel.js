@@ -80,12 +80,34 @@ function row(tl, workspaceId, seq) {
   }
 }
 
-// This monitor's rows, sorted by (workspace, first-seen sequence). `orderSeq`
-// maps address -> sequence so icons keep their slot when Hyprland reorders its
+// The rows this bar instance should show, sorted.
+//
+// `opts` rather than a fifth positional argument: this took four booleans in
+// short order and call sites were becoming unreadable.
+//
+//   includeSpecial  include scratchpad / special workspaces (negative ids)
+//   allOutputs      ignore the monitor filter and take every window
+//   sortBy          "workspace" (default) or "creation"
+//   orderSeq        address -> first-seen sequence, from ensureOrder()
+//
+// `orderSeq` is what keeps icons in their slot when Hyprland reorders its
 // client list; unknown addresses sort last rather than jumping to the front.
-function forMonitor(values, monitorId, includeSpecial, orderSeq) {
+//
+// "creation" drops the workspace term and orders purely by that sequence, so
+// icons stay put as windows move between workspaces. "workspace" groups by
+// workspace first, which is the default and what the bar has always done.
+function forMonitor(values, monitorId, opts) {
+  opts = opts || {}
+  var includeSpecial = opts.includeSpecial === true
+  var allOutputs = opts.allOutputs === true
+  var byCreation = String(opts.sortBy || "workspace") === "creation"
+  var orderSeq = opts.orderSeq
+
   var out = []
-  if (monitorId === null || monitorId === undefined || Number(monitorId) < 0) return out
+  // With allOutputs there is no monitor to resolve, so an unresolved monitorId
+  // is only fatal to the per-monitor path.
+  if (!allOutputs && (monitorId === null || monitorId === undefined || Number(monitorId) < 0))
+    return out
 
   for (var i = 0; i < (values ? values.length : 0); i++) {
     var tl = values[i]
@@ -95,7 +117,7 @@ function forMonitor(values, monitorId, includeSpecial, orderSeq) {
     if (wsId === null) continue
     // Special/scratchpad workspaces carry negative ids.
     if (!includeSpecial && wsId < 0) continue
-    if (monitorIdOf(tl) !== Number(monitorId)) continue
+    if (!allOutputs && monitorIdOf(tl) !== Number(monitorId)) continue
 
     var addr = String(tl.address || "")
     if (!addr) continue
@@ -105,7 +127,7 @@ function forMonitor(values, monitorId, includeSpecial, orderSeq) {
   }
 
   out.sort(function (a, b) {
-    if (a.workspaceId !== b.workspaceId) return a.workspaceId - b.workspaceId
+    if (!byCreation && a.workspaceId !== b.workspaceId) return a.workspaceId - b.workspaceId
     if (a.seq !== b.seq) return a.seq - b.seq
     return a.address < b.address ? -1 : (a.address > b.address ? 1 : 0)
   })

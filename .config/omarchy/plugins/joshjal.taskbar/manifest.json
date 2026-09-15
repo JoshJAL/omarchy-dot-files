@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "joshjal.taskbar",
   "name": "Taskbar",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": "joshjal",
   "license": "MIT",
   "description": "One icon per open window on this monitor, with a live hover preview",
@@ -18,7 +18,14 @@
       "iconSize": 14,
       "iconSizeMin": 10,
       "includeSpecial": false,
+      "allOutputs": false,
+      "sortBy": "workspace",
       "maxIcons": 0,
+      "showTitles": false,
+      "maxTitleWidth": 140,
+      "dimInactive": true,
+      "middleClick": "close",
+      "rightClick": "menu",
       "previewDelay": 320,
       "previewWidth": 320,
       "previewHeight": 200,
@@ -61,6 +68,58 @@
         "label": "Include special workspaces",
         "description": "Also show windows parked on special workspaces, such as the scratchpad.",
         "defaultValue": false
+      },
+      {
+        "key": "allOutputs",
+        "type": "boolean",
+        "label": "Show windows from every monitor",
+        "description": "Off, each monitor's taskbar lists only its own windows. On, every taskbar lists every window, so the same window appears on all of them.",
+        "defaultValue": false
+      },
+      {
+        "key": "sortBy",
+        "type": "string",
+        "label": "Order: workspace or creation",
+        "description": "\"workspace\" groups icons by workspace, then by when each window appeared. \"creation\" orders purely by age, so icons keep their slot when a window changes workspace.",
+        "defaultValue": "workspace"
+      },
+      {
+        "key": "showTitles",
+        "type": "boolean",
+        "label": "Show window titles",
+        "description": "Draw the window title beside each icon. Ignored on vertical bars, which have no width to spend on it.",
+        "defaultValue": false
+      },
+      {
+        "key": "maxTitleWidth",
+        "type": "integer",
+        "label": "Max title width (px)",
+        "description": "Titles longer than this are elided. Only applies when titles are shown.",
+        "min": 40,
+        "max": 400,
+        "step": 10,
+        "defaultValue": 140
+      },
+      {
+        "key": "dimInactive",
+        "type": "boolean",
+        "label": "Dim unfocused windows",
+        "description": "Unfocused windows render at half opacity. Turn off to render every icon at full strength.",
+        "defaultValue": true
+      },
+      {
+        "key": "middleClick",
+        "type": "string",
+        "label": "Middle click: close, bring, focus or none",
+        "description": "What middle-clicking an icon does. \"bring\" pulls the window onto the workspace you are looking at.",
+        "defaultValue": "close"
+      },
+      {
+        "key": "rightClick",
+        "type": "string",
+        "label": "Right click: menu, close, bring, focus or none",
+        "description": "What right-clicking an icon does. \"menu\" opens the context menu (close, move to workspace, toggle floating, move to monitor).",
+        "defaultValue": "menu"
       },
       {
         "key": "previewDelay",

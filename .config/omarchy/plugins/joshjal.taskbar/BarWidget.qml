@@ -23,12 +23,38 @@ BarWidget {
   readonly property int iconSize: Number(root.setting("iconSize", 14))
   readonly property int iconSizeMin: Number(root.setting("iconSizeMin", 10))
   readonly property bool includeSpecial: root.setting("includeSpecial", false) === true
+  readonly property bool allOutputs: root.setting("allOutputs", false) === true
+  readonly property string sortBy: String(root.setting("sortBy", "workspace"))
   readonly property int maxIcons: Number(root.setting("maxIcons", 0))
   readonly property int previewDelay: Number(root.setting("previewDelay", 320))
   readonly property int previewWidth: Number(root.setting("previewWidth", 320))
   readonly property int previewHeight: Number(root.setting("previewHeight", 200))
   readonly property var classIconOverrides: root.setting("classIconOverrides", ({}))
   readonly property bool previewsEnabled: root.previewDelay >= 0
+
+  // Inactive windows read back by default. `!== false` rather than `=== true`
+  // so the default stays on when the key is absent.
+  readonly property bool dimInactive: root.setting("dimInactive", true) !== false
+  readonly property bool showTitles: root.setting("showTitles", false) === true
+  readonly property int maxTitleWidth: Number(root.setting("maxTitleWidth", 140))
+
+  // Click actions: "focus", "close", "bring", "none", plus "menu" on right.
+  // Defaults reproduce the hardcoded behavior these settings replaced, so an
+  // untouched shell.json behaves exactly as before.
+  readonly property string middleClick: String(root.setting("middleClick", "close"))
+  readonly property string rightClick: String(root.setting("rightClick", "menu"))
+
+  // Settings that decide WHICH rows exist, rather than how a row looks, are
+  // read imperatively inside refresh() -- so changing one in shell.json moves
+  // nothing until the next Hyprland event happens to rebuild the model. That
+  // made allOutputs look like it did nothing when toggled back off: the list
+  // simply kept whatever the last event left behind. Rebuild explicitly.
+  //
+  // callLater, not a direct call: a settings delta can land mid-event, and
+  // refresh() must not re-enter from inside onRawEvent.
+  onAllOutputsChanged: Qt.callLater(root.refresh)
+  onIncludeSpecialChanged: Qt.callLater(root.refresh)
+  onSortByChanged: Qt.callLater(root.refresh)
 
   // ---- the model.
   //
@@ -117,7 +143,12 @@ BarWidget {
 
     root.toplevelByAddress = WindowModel.toplevelMap(values)
 
-    var next = WindowModel.forMonitor(values, root.monitorId, root.includeSpecial, root.orderSeq)
+    var next = WindowModel.forMonitor(values, root.monitorId, {
+      includeSpecial: root.includeSpecial,
+      allOutputs: root.allOutputs,
+      sortBy: root.sortBy,
+      orderSeq: root.orderSeq
+    })
     if (WindowModel.syncModel(windowModel, next)) root.modelRevision++
 
     root.syncHoverToplevel()
@@ -171,6 +202,46 @@ BarWidget {
   }
   function closeWindow(address) {
     if (address) Hyprland.dispatch(Dispatch.closeWindow(address))
+  }
+
+  // "Bring" pulls the window onto the workspace you are already looking at,
+  // instead of jumping you to wherever it lives. follow=false because the
+  // destination IS the current workspace -- following would be a no-op at best.
+  function bringWindow(address) {
+    if (!address) return
+    var ws = root.activeWorkspaceId()
+    if (ws !== null) Hyprland.dispatch(Dispatch.moveToWorkspace(address, ws, false))
+    Hyprland.dispatch(Dispatch.focusWindow(address))
+  }
+
+  // This bar's own monitor decides where "here" is. One widget instance exists
+  // per screen, so the taskbar that was clicked names the destination; a global
+  // focused-workspace lookup would send windows to the wrong screen whenever
+  // you click a bar that isn't the focused one.
+  function activeWorkspaceId() {
+    var ms = Hyprland.monitors ? Hyprland.monitors.values : []
+    for (var i = 0; i < ms.length; i++) {
+      var m = ms[i]
+      if (!m || Number(m.id) !== Number(root.monitorId)) continue
+      if (m.activeWorkspace && m.activeWorkspace.id !== undefined) return Number(m.activeWorkspace.id)
+    }
+    return null
+  }
+
+  // Single dispatch point for both click sites -- the bar buttons and the
+  // overflow rows -- so a remapped button behaves identically in each. Unknown
+  // values fall through to focus rather than doing nothing, so a typo in
+  // shell.json degrades to the ordinary click instead of a dead icon.
+  function runClickAction(kind, anchor, address) {
+    if (!address) return
+    switch (String(kind)) {
+    case "none": return
+    case "close": root.closeWindow(address); return
+    case "bring": root.bringWindow(address); return
+    case "menu": root.openMenu(anchor, address); return
+    case "focus":
+    default: root.focusWindow(address); return
+    }
   }
 
   // Computed on demand, never bound -- same re-entrancy rule as resolveMonitor().

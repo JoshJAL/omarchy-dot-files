@@ -22,22 +22,42 @@ BarIconButton {
   property var host: null
   property real iconPixelSize: 14
 
+  // Titled mode draws its own icon+text row (see below) because the two
+  // centring schemes collide: WidgetButton anchors its label centerIn parent
+  // and BarIconButton anchors the icon canvas centerIn parent, so turning the
+  // base label on would stack the text straight on top of the icon -- in the
+  // icon font, at that. Vertical bars keep icons only; there is no width to
+  // spend on a title.
+  readonly property bool titled: !!button.host && button.host.showTitles && !button.vertical
+
+  readonly property real titledWidth:
+    Style.space(4) * 2 + button.iconPixelSize + Style.space(3) + titleLabel.width
+
   labelVisible: false
   hasVisualContent: true
   opticalSize: Math.max(button.iconPixelSize, Style.bar.iconCanvas)
+  fixedWidth: button.vertical ? -1 : (button.titled ? button.titledWidth : button.slotSize)
 
   // The plain bar tooltip is the fallback identification while previews are
   // off; with previews on it would double up with the card, so it is cleared
   // (Bar.showTooltip early-returns on empty text).
   tooltipText: button.host && button.host.previewsEnabled ? "" : button.title
 
-  // Inactive windows read back, the focused one reads forward.
-  opacity: button.activated ? 1.0 : 0.5
+  // Inactive windows read back, the focused one reads forward. With
+  // dimInactive off every window reads forward and only the urgent marker and
+  // the bar's own hover treatment distinguish them.
+  opacity: (!button.host || button.host.dimInactive) && !button.activated ? 0.5 : 1.0
   Behavior on opacity { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
 
   Component.onCompleted: if (button.host) button.host.delegateCreations++
 
-  iconComponent: Component {
+  // Null in titled mode so the base draws nothing and titleRow owns the
+  // rendering. hasVisualContent is pinned true above, so emptying the base
+  // content cannot make the button vanish.
+  iconComponent: button.titled ? null : iconOnly
+
+  Component {
+    id: iconOnly
     WindowIcon {
       appClass: button.appClass
       appLibrary: button.host && button.host.bar && button.host.bar.shell
@@ -45,6 +65,64 @@ BarIconButton {
       overrides: button.host ? button.host.classIconOverrides : ({})
       size: button.iconPixelSize
       tint: button.foreground
+    }
+  }
+
+  // ---- titled mode: icon and elided title, left-aligned.
+  //
+  // Explicit height rather than letting the Row derive it from its children:
+  // the children anchor to the Row's verticalCenter, and deriving height from
+  // them while they position against it is a binding loop.
+  Row {
+    id: titleRow
+    visible: button.titled
+    height: parent.height
+    spacing: Style.space(3)
+    anchors.left: parent.left
+    anchors.leftMargin: Style.space(4)
+
+    WindowIcon {
+      anchors.verticalCenter: parent.verticalCenter
+      appClass: button.appClass
+      appLibrary: button.host && button.host.bar && button.host.bar.shell
+        ? button.host.bar.shell.appLibrary : null
+      overrides: button.host ? button.host.classIconOverrides : ({})
+      size: button.iconPixelSize
+      tint: button.foreground
+    }
+
+    // Natural, unelided width of the title. Measuring here rather than reading
+    // titleLabel.implicitWidth is load-bearing: an eliding Text reports the
+    // ELIDED width as its implicitWidth, so binding width to implicitWidth
+    // feeds back on itself and ratchets the label down to a single character.
+    TextMetrics {
+      id: titleMetrics
+      font: titleLabel.font
+      text: button.title
+    }
+
+    Text {
+      id: titleLabel
+      anchors.verticalCenter: parent.verticalCenter
+      textFormat: Text.PlainText
+      text: button.title
+      color: button.foreground
+      font.family: button.bar ? button.bar.fontFamily : Style.font.family
+      font.pixelSize: Style.font.bodySmall
+      renderType: Text.NativeRendering
+      elide: Text.ElideRight
+      // Width feeds titledWidth -> fixedWidth, so it must depend only on the
+      // measured text and the cap, never on the button's own width.
+      //
+      // The +2 is not slop. TextMetrics.width is the font's advance sum, but
+      // NativeRendering paints a hair wider (hinting, glyph overhang), so a
+      // title that genuinely fits still tripped ElideRight and lost its last
+      // couple of characters -- "T3 Code (Alpha)" came out "T3 Code (Alph…"
+      // against a 300px cap. Measure generously, then let the cap do the
+      // actual limiting.
+      readonly property real naturalWidth:
+        Math.ceil(Math.max(titleMetrics.width, titleMetrics.boundingRect.width)) + 2
+      width: Math.min(naturalWidth, Math.max(0, button.host ? button.host.maxTitleWidth : 140))
     }
   }
 
@@ -59,9 +137,12 @@ BarIconButton {
     // Always first: the preview must not survive the click, and must not
     // re-latch while the pointer is still sitting on this icon.
     button.host.dismissPreviewForClick(button.address)
-    if (which === Qt.RightButton) button.host.openMenu(button, button.address)
-    else if (which === Qt.MiddleButton) button.host.closeWindow(button.address)
-    else button.host.focusWindow(button.address)
+    if (which === Qt.RightButton)
+      button.host.runClickAction(button.host.rightClick, button, button.address)
+    else if (which === Qt.MiddleButton)
+      button.host.runClickAction(button.host.middleClick, button, button.address)
+    else
+      button.host.focusWindow(button.address)
   }
 
   onTooltipHoveredChanged: {
