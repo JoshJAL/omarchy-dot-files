@@ -22,6 +22,18 @@ source "$OMARCHY_PATH/default/bash/rc"
 # Local secrets (API keys). Untracked, mode 600 — see ~/.config/secrets.env
 [ -r "$HOME/.config/secrets.env" ] && . "$HOME/.config/secrets.env"
 
+# Point at the systemd-managed user ssh-agent (ssh-agent.socket): one agent per
+# login session, socket-activated, cleaned up on logout. Keys load lazily on
+# first use via AddKeysToAgent in ~/.ssh/config.
+#
+# Fills a gap, never overrides: skipped if something already exported
+# SSH_AUTH_SOCK (1Password, gnome-keyring, a forwarded agent) and skipped if the
+# socket isn't there, so a machine without the unit keeps whatever it already
+# uses instead of getting a dead path.
+if [ -z "$SSH_AUTH_SOCK" ] && [ -S "${XDG_RUNTIME_DIR:-/run/user/$UID}/ssh-agent.socket" ]; then
+  export SSH_AUTH_SOCK="${XDG_RUNTIME_DIR:-/run/user/$UID}/ssh-agent.socket"
+fi
+
 export BUN_INSTALL="$HOME/.bun"
 # Guarded: .bash_profile sources this file, so an unguarded prepend landed in
 # PATH twice for login shells.
