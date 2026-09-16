@@ -28,6 +28,15 @@ o.bind("SUPER + End", "Restore window width", "omarchy-hyprland-window-width res
 hl.unbind("SUPER + ALT + Home")
 o.bind("SUPER + ALT + End", "Save window width", "omarchy-hyprland-window-width save")
 
+-- Reset a window to its full tile size. The restore half above only puts back a
+-- width that was saved earlier with the save half, and it never touches height,
+-- so there is no stock key for "undo the resize I just did by accident". This
+-- recomputes the tile from the window's own monitor, so it needs no saved state
+-- and is correct on all three displays. Absolute path for the same reason as
+-- the screensaver below: the exec dispatcher gets no login shell, so the PATH
+-- entry for ~/.local/bin is not there.
+o.bind("SUPER + SHIFT + End", "Reset window to full size", os.getenv("HOME") .. "/.local/bin/hypr-window-reset-size")
+
 -- Capture bindings on SUPER+SHIFT (this keyboard has no PrintScreen key).
 -- Omarchy 4 puts these on PRINT / SUPER+PRINT / SUPER+CTRL+PRINT.
 hl.unbind("SUPER + SHIFT + S") -- Omarchy 4: Google Maps

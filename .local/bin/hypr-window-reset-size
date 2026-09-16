@@ -1,0 +1,43 @@
+#!/bin/bash
+
+# Reset the focused Hyprland window to fill its tile.
+#
+# Omarchy's window-width pair (Super + End / Super + Alt + End) only restores a
+# width that was saved earlier with the save half, and only ever the width. This
+# needs no saved state and fixes height too: it recomputes the tile from the
+# window's own monitor, so it is correct on any of the three displays.
+#
+# On a workspace with more than one tiled window there is no single "normal"
+# size to return to, so this just grows the window as far as its siblings allow.
+
+set -euo pipefail
+
+active=$(hyprctl activewindow -j 2>/dev/null)
+address=$(jq -r '.address // empty' <<<"$active")
+[[ -n $address ]] || exit 0
+
+if jq -e '.floating' <<<"$active" >/dev/null; then
+  omarchy-notification-send -g "Window is floating" "Tile it first with Super + T."
+  exit 0
+fi
+
+monitor=$(hyprctl monitors -j |
+  jq -e --argjson id "$(jq '.monitor' <<<"$active")" '.[] | select(.id == $id)')
+
+# reserved is [left, top, right, bottom] -- layer-shell space, i.e. the top bar.
+read -r width height scale res_l res_t res_r res_b < <(
+  jq -r '[.width, .height, .scale, .reserved[0], .reserved[1], .reserved[2], .reserved[3]]
+         | @tsv' <<<"$monitor"
+)
+
+# gaps_out is CSS order: top right bottom left.
+read -r gap_t gap_r gap_b gap_l < <(
+  hyprctl getoption general:gaps_out | sed -n 's/^css gap data: //p'
+)
+border=$(hyprctl getoption general:border_size | sed -n 's/^int: //p')
+
+target_w=$(python3 -c "print(round($width / $scale) - $res_l - $res_r - $gap_l - $gap_r - 2 * $border)")
+target_h=$(python3 -c "print(round($height / $scale) - $res_t - $res_b - $gap_t - $gap_b - 2 * $border)")
+
+hyprctl dispatch \
+  "hl.dsp.window.resize({ window = \"address:$address\", x = $target_w, y = $target_h })" >/dev/null
