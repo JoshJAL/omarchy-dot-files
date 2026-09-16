@@ -51,6 +51,8 @@ alias dotfiles='git --git-dir=$HOME/.dotfiles --work-tree=$HOME'
 # ~/.gitignore is deny-by-default, so tracking a NEW file needs -f. Already-tracked
 # files are unaffected by gitignore and keep working with plain `dotfiles add`.
 alias dotfiles-track='git --git-dir=$HOME/.dotfiles --work-tree=$HOME add -f'
+alias agentfiles='git --git-dir=$HOME/.agentfiles --work-tree=$HOME'
+alias agentfiles-track='git --git-dir=$HOME/.agentfiles --work-tree=$HOME add -f'
 
 # mise: never hold back a release for being "too new".
 # mise's minimum_release_age defaults to 24h (supply-chain gate, matches pnpm v11).
