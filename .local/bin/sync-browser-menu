@@ -71,6 +71,20 @@ ICON_DIRS = [
 
 GLOBE = "\U000f059f"  # nf-md-web, what Omarchy uses when it has no brand mark
 
+# Brand marks that beat tracing, keyed by slug. Tracing is still the default --
+# it cannot pick the wrong brand -- but some icons do not survive it. Zen's is
+# white rings on a dark square, so whichever polarity is traced loses either the
+# rings or the container, and it came out a plain hollow circle.
+#
+# Every entry here is checked by eye against the installed icon before being
+# added. That matters: Simple Icons' "helium" is the Helium IoT network, an
+# unrelated company, so Helium is deliberately absent and stays traced.
+CURATED = {
+    "zen": "https://cdn.simpleicons.org/zenbrowser",
+    "brave": "https://cdn.simpleicons.org/brave",
+}
+CACHE_DIR = os.path.expanduser("~/.cache/sync-browser-menu")
+
 # Desktop id -> the slug Omarchy's own commands use. These already have rows.
 SHIPPED = {
     "chromium.desktop": "chromium",
@@ -239,6 +253,40 @@ def trace_path(icon_path, workdir):
         return None
     _, _, vbw, vbh = (float(v) for v in box.group(1).split())
     return paths[0], vbw, vbh
+
+
+def curated_contours(slug, odf):
+    """Brand mark for a curated slug, or None.
+
+    Cached on disk: the path unit fires on any application install, not just a
+    browser, so this must not depend on the network being up or hit it on every
+    run.
+    """
+    url = CURATED.get(slug)
+    if url is None or odf is None:
+        return None
+    cached = os.path.join(CACHE_DIR, "%s.svg" % slug)
+    svg = None
+    if os.path.exists(cached):
+        try:
+            svg = open(cached, encoding="utf-8").read()
+        except OSError:
+            svg = None
+    if not svg:
+        try:
+            import urllib.request
+            request = urllib.request.Request(url, headers={"User-Agent": "sync-browser-menu"})
+            with urllib.request.urlopen(request, timeout=10) as response:
+                svg = response.read().decode("utf-8")
+            os.makedirs(CACHE_DIR, exist_ok=True)
+            with open(cached, "w", encoding="utf-8") as handle:
+                handle.write(svg)
+        except Exception:
+            return None
+    try:
+        return odf.svg_contours(svg, url) or None
+    except Exception:
+        return None
 
 
 def contours_for(icon_path, odf, workdir):
@@ -446,10 +494,11 @@ def main():
                 if slug not in globes:
                     continue  # already has a proper mark upstream
                 shipped = globes[slug]
-            contours = None
-            icon_path = resolve_icon(icon_name)
-            if icon_path and odf is not None:
-                contours = contours_for(icon_path, odf, workdir)
+            contours = curated_contours(slug, odf)
+            if contours is None:
+                icon_path = resolve_icon(icon_name)
+                if icon_path and odf is not None:
+                    contours = contours_for(icon_path, odf, workdir)
             wanted.append((desktop_id, label, slug, shipped))
             if contours:
                 marks.append((slug, contours))
@@ -466,6 +515,14 @@ def main():
     original = open(EXT, encoding="utf-8").read()
     updated = splice(original, render(rows))
     if updated == original:
+        # The rows can be identical while the glyphs behind them changed --
+        # swapping a traced mark for a curated one keeps the same codepoint.
+        # Returning here without restarting would leave the old outlines on
+        # screen until something else restarted the shell.
+        if FONT_CHANGED:
+            print("sync-browser-menu: glyph font changed, restarting the shell")
+            subprocess.run(["omarchy", "restart", "shell"], check=False,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return 0
 
     # A malformed extension makes the shell drop EVERY user entry, so never
