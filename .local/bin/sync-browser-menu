@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+"""Keep Defaults > Browser in the Omarchy menu in sync with installed browsers.
+
+Omarchy's shipped menu (default/omarchy/omarchy-menu.jsonc) hardcodes one row
+per browser it knows about. The list is NOT derived from what is installed, so
+a browser it has never heard of -- Helium here -- simply never appears under
+Defaults > Browser, no matter how it was installed.
+
+The menu's own extension mechanism cannot fix that on its own: docs/menu.md is
+explicit that "an extension can point a submenu at an existing provider but
+cannot declare a new one", and the providers map lives in Menu.qml under
+/usr/share/omarchy. So there is no way to make the submenu enumerate browsers
+at runtime from user config. Instead this regenerates static rows into a
+managed block of the user extension, and something else re-runs it (a systemd
+path unit on the desktop-entry directories, plus the post-update hook).
+
+Row identity matches what upstream would use -- setup.default.browser.<slug> --
+so if https://github.com/omacom/omarchy/pull/12132 lands, the generated row
+merges with the shipped one instead of duplicating it (mergeMenuSources
+overlays per key).
+
+A note on icons: these are FONT GLYPHS, not images. Menu.qml renders a row's
+icon as text (iconText, font.family), and only rows from the QML-native `apps`
+provider get real image icons via appIconImage. So a browser's own PNG cannot
+be used here. Known browsers get a Nerd Font brand glyph; everything else gets
+the generic globe -- which is what Omarchy itself uses for Brave and Zen.
+"""
+
+import configparser
+import glob
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+EXT = os.path.expanduser("~/.config/omarchy/extensions/omarchy-menu.jsonc")
+BEGIN = "  // >>> sync-browser-menu: generated block, do not hand-edit >>>"
+END = "  // <<< sync-browser-menu <<<"
+
+APP_DIRS = [
+    os.path.expanduser("~/.local/share/applications"),
+    "/usr/share/applications",
+]
+
+# Rows Omarchy already ships. Regenerating these would duplicate a shipped row
+# with a worse action, so they are left alone.
+SHIPPED = {
+    "chromium.desktop",
+    "google-chrome.desktop",
+    "brave-browser.desktop",
+    "brave-origin.desktop",
+    "microsoft-edge.desktop",
+    "firefox.desktop",
+    "zen.desktop",
+}
+
+GLOBE = "\U000f059f"  # nf-md-web, what Omarchy uses for Brave and Zen
+GLYPHS = {
+    "vivaldi": "\U000f059f",
+    "opera": "\U000f059f",
+    "librewolf": "\U000f0239",   # firefox glyph
+    "waterfox": "\U000f0239",
+    "floorp": "\U000f0239",
+    "tor": "\U000f059f",
+    "ungoogled-chromium": "",
+    "thorium": "",
+    "helium": "\U000f059f",
+}
+
+
+def read_entry(path):
+    cp = configparser.RawConfigParser(interpolation=None, strict=False)
+    try:
+        cp.read(path, encoding="utf-8")
+    except Exception:
+        return None
+    return cp["Desktop Entry"] if cp.has_section("Desktop Entry") else None
+
+
+def truthy(value):
+    return str(value or "").strip().lower() == "true"
+
+
+def discover():
+    """Installed browsers, keyed by desktop id, first directory wins."""
+    found, seen = [], set()
+    for directory in APP_DIRS:
+        for path in sorted(glob.glob(os.path.join(directory, "*.desktop"))):
+            desktop_id = os.path.basename(path)
+            if desktop_id in seen or desktop_id in SHIPPED:
+                continue
+            entry = read_entry(path)
+            if entry is None:
+                continue
+            if "x-scheme-handler/http" not in entry.get("MimeType", ""):
+                continue
+            # NoDisplay hides an entry from launchers; it is how duplicate and
+            # alias entries mark themselves (com.google.Chrome.desktop next to
+            # google-chrome.desktop, and the helium-browser.desktop alias that
+            # keep-default-apps writes). Listing them would double up rows.
+            if truthy(entry.get("NoDisplay")) or truthy(entry.get("Hidden")):
+                continue
+            seen.add(desktop_id)
+            found.append((desktop_id, entry.get("Name", "") or desktop_id))
+    return found
+
+
+def label_for(name):
+    # Omarchy's own rows read "Brave", "Zen", "Chrome" -- not "Brave Browser".
+    return re.sub(r"\s+(Web\s+)?Browser$", "", name.strip()) or name.strip()
+
+
+def slug_for(desktop_id):
+    return re.sub(r"[^a-z0-9-]+", "-", desktop_id[: -len(".desktop")].lower()).strip("-")
+
+
+def row_for(desktop_id, name):
+    slug = slug_for(desktop_id)
+    label = label_for(name)
+    icon = GLYPHS.get(slug, GLOBE)
+    # Try Omarchy's own command first so the row upgrades itself (and regains
+    # its notification) if Omarchy learns this browser; fall back to
+    # xdg-settings, which works for any desktop id. Both streams are discarded
+    # because omarchy-default-browser prints usage to stdout, not stderr.
+    action = (
+        f"omarchy-default-browser {slug} >/dev/null 2>&1 || "
+        f"{{ env -u BROWSER xdg-settings set default-web-browser {desktop_id} && "
+        f"omarchy-notification-send -g {icon} '{label} is now the default browser'; }}"
+    )
+    # Ask xdg-settings rather than omarchy-default-browser: that command reports
+    # a bare desktop id for browsers it does not know, and the short name for
+    # ones it does. The desktop id is stable either way.
+    checked = (
+        '[[ "$(env -u BROWSER xdg-settings get default-web-browser)" == '
+        f'"{desktop_id}" ]]'
+    )
+    return f"setup.default.browser.{slug}", {
+        "icon": icon,
+        "label": label,
+        "checked": checked,
+        "action": action,
+    }
+
+
+def render(rows):
+    lines = [BEGIN]
+    for key, body in rows:
+        lines.append(f"  {json.dumps(key)}: {json.dumps(body, ensure_ascii=False)},")
+    lines.append(END)
+    return "\n".join(lines)
+
+
+def strip_jsonc(text):
+    text = re.sub(r"^\s*//.*$", "", text, flags=re.M)
+    return re.sub(r",(\s*[}\]])", r"\1", text)
+
+
+def splice(original, block):
+    if BEGIN in original and END in original:
+        head, rest = original.split(BEGIN, 1)
+        _, tail = rest.split(END, 1)
+        return head + block + tail
+    # First run: insert before the final closing brace.
+    idx = original.rstrip().rfind("}")
+    if idx == -1:
+        raise SystemExit("sync-browser-menu: extension file has no closing brace")
+    return original.rstrip()[:idx] + block + "\n}\n"
+
+
+def main():
+    if not os.path.exists(EXT):
+        print(f"sync-browser-menu: {EXT} missing, nothing to do", file=sys.stderr)
+        return 0
+
+    original = open(EXT, encoding="utf-8").read()
+    rows = [row_for(d, n) for d, n in discover()]
+    updated = splice(original, render(rows))
+
+    if updated == original:
+        return 0
+
+    # A malformed extension makes the shell drop EVERY user entry, so never
+    # install one that does not parse.
+    try:
+        parsed = json.loads(strip_jsonc(updated))
+    except json.JSONDecodeError as exc:
+        print(f"sync-browser-menu: refusing to write invalid JSONC: {exc}", file=sys.stderr)
+        return 1
+    for key, _ in rows:
+        if key not in parsed:
+            print(f"sync-browser-menu: {key} missing after render", file=sys.stderr)
+            return 1
+
+    directory = os.path.dirname(EXT)
+    with tempfile.NamedTemporaryFile("w", dir=directory, delete=False, encoding="utf-8") as tmp:
+        tmp.write(updated)
+        temp_path = tmp.name
+    shutil.copymode(EXT, temp_path)
+    os.replace(temp_path, EXT)
+
+    names = ", ".join(body["label"] for _, body in rows) or "none"
+    print(f"sync-browser-menu: {len(rows)} extra browser row(s): {names}")
+    subprocess.run(["omarchy", "menu", "refresh"], check=False,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

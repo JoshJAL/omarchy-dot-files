@@ -1,0 +1,13 @@
+[Unit]
+Description=Watch desktop entries for installed/removed browsers
+
+[Path]
+# Adding or removing a .desktop changes the directory's mtime. This fires for
+# any application, not just browsers; the sync is idempotent and cheap, and
+# rewrites the menu only when the browser set actually changed.
+PathModified=/usr/share/applications
+PathModified=%h/.local/share/applications
+Unit=sync-browser-menu.service
+
+[Install]
+WantedBy=default.target
