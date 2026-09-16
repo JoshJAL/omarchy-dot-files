@@ -73,19 +73,9 @@ if on_work_laptop then
     hl.env("AQ_DRM_DEVICES", table.concat(drm_cards, ":"))
   end
 
-  -- 2026-09-03: Pin VA-API to the Intel media driver.
-  -- Both iHD_drv_video.so (Intel) and nvidia_drv_video.so are installed. With no
-  -- LIBVA_DRIVER_NAME, libva can select the NVIDIA driver, which allocates NV12
-  -- dmabuf frames that Intel's EGL (the GPU Hyprland composites on) cannot import.
-  -- Symptom was eglCreateImage EGL_BAD_MATCH ~30x/sec in every Chromium/Electron
-  -- app: stutter, missing page styles, unscrollable pages.
-  -- Measured on sofwerx.org: 908 EGL failures/16s default, 0 with iHD.
-  -- Benefits Slack, 1Password and other Electron apps too, not just browsers.
-  --
-  -- Desktop note: iHD_drv_video.so is not even installed there. Setting this
-  -- unguarded would point libva at a missing driver and lose hardware video
-  -- decode entirely.
-  hl.env("LIBVA_DRIVER_NAME", "iHD")
+  -- NOTE: the VA-API driver pin that used to live here has moved to the BOTTOM
+  -- of this file. It has to run after require("default.hypr.omarchy"). See the
+  -- comment there before moving it back.
 end
 -- ---------------------------------------------------------------------------
 
@@ -114,3 +104,33 @@ require("default.hypr.toggles")
 -- Add any other personal Hyprland configuration below.
 -- o.window("qemu", { workspace = "5" })
 --
+
+-- ---------------------------------------------------------------------------
+-- VA-API driver pin. MUST stay below require("default.hypr.omarchy").
+--
+-- 2026-09-03: Pin VA-API to the Intel media driver.
+-- Both iHD_drv_video.so (Intel) and nvidia_drv_video.so are installed. With no
+-- LIBVA_DRIVER_NAME, libva can select the NVIDIA driver, which allocates NV12
+-- dmabuf frames that Intel's EGL (the GPU Hyprland composites on) cannot import.
+-- Symptom was eglCreateImage EGL_BAD_MATCH ~30x/sec in every Chromium/Electron
+-- app: stutter, missing page styles, unscrollable pages.
+-- Measured on sofwerx.org: 908 EGL failures/16s default, 0 with iHD.
+-- Benefits Slack, 1Password and other Electron apps too, not just browsers.
+--
+-- Desktop note: iHD_drv_video.so is not even installed there. Setting this
+-- unguarded would point libva at a missing driver and lose hardware video
+-- decode entirely -- hence the on_work_laptop guard.
+--
+-- ORDERING, learned the hard way (2026-09-16). This spent one commit inside the
+-- GPU block at the top of the file and silently stopped working. Omarchy's
+-- default/hypr/nvidia.lua sets LIBVA_DRIVER_NAME=nvidia, and it loads through
+-- omarchy.lua -> envs.lua -> nvidia.lua at the require() above. hl.env is
+-- last-write-wins, so anything set BEFORE that require is overwritten. Nothing
+-- errors; the laptop just came back from a reboot on the NVIDIA VA-API driver
+-- and every Chromium/Electron app rendered badly again.
+--
+-- It also hid on the desktop, where on_work_laptop is false and the block never
+-- ran, so the regression only ever showed up here. Keep this last.
+if on_work_laptop then
+  hl.env("LIBVA_DRIVER_NAME", "iHD")
+end
