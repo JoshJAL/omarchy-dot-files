@@ -115,6 +115,12 @@ id_ed25519*
 .pypirc
 .pgpass
 
+# Vendor plugin caches. Version-pinned paths full of symlinks -- tracking them
+# strands dead entries in the repo on the next plugin bump. Agent config lives
+# in the private ~/.agentfiles repo instead.
+.claude/plugins/cache/
+.codex/plugins/
+
 # Local backups and stray archives/logs
 *.bak
 *.bak.*
