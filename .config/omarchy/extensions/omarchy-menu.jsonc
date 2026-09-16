@@ -1,0 +1,49 @@
+{
+  // Extend the Quickshell Omarchy menu with JSONC.
+  //
+  // IDs are object keys. The parent is inferred from the dotted id, so
+  // "personal.notes" appears under "personal", and "personal" appears on the
+  // root menu. Reuse an existing id to override/extend it.
+  //
+  // Fields:
+  //   icon        Nerd Font glyph shown in the icon column.
+  //   label       Visible row title.
+  //   action      Shell command to run. If omitted, the row is a submenu.
+  //   target      Existing submenu id to open. Use for links/aliases.
+  //   provider    Runtime provider function/command returning JSON rows.
+  //   aliases     alternate `omarchy menu summon <name>` routes; also searchable.
+  //   description Optional subtitle and extra search text.
+  //   when        Shell condition; hide row when it fails.
+  //   checked     Shell condition; append ✓ when it succeeds.
+  //
+  // Examples:
+  // "personal": {"icon":"","label":"Personal"},
+  // "personal.notes": {"icon":"󰎞","label":"Notes","action":"omarchy-launch-editor ~/notes"},
+  // "personal.files": {"icon":"","label":"Files","action":"uwsm-app -- nautilus ~/Documents"},
+  //
+  // Only use provider when a provider_name function or command named "name"
+  // returns JSON rows. Static submenus only need dotted ids.
+  //
+  // Example: replace the default About action by reusing the same id. Existing
+  // fields are kept unless overridden.
+  // "about": {"icon":"","label":"About","action":"omarchy-launch-or-focus-tui \"zsh -c 'fastfetch; read -k 1'\""},
+
+  // Helium in Defaults > Browser.
+  //
+  // Omarchy's shipped menu hardcodes its browser rows and has none for Helium,
+  // so it never appears no matter what is installed. Upstream PR:
+  // https://github.com/omacom/omarchy/pull/12132 -- reusing the same id here
+  // means this row merges with the shipped one if that lands.
+  //
+  // Deliberately does NOT rely on `omarchy-default-browser helium`: the
+  // installed version only accepts chromium/chrome/brave/brave-origin/edge/
+  // firefox/zen and exits 1 on anything else. It is still tried first, so this
+  // upgrades itself (and regains the notification) once Omarchy knows Helium.
+  // Both streams are discarded because that command prints its usage text to
+  // STDOUT, not stderr, so 2>/dev/null alone does not silence it.
+  //
+  // `checked` asks xdg-settings rather than `omarchy-default-browser`, because
+  // that command reports the raw "helium.desktop" today and would report
+  // "helium" after the PR -- the desktop id is stable across both.
+  "setup.default.browser.helium": {"icon":"\udb81\udd9f","label":"Helium","checked":"[[ \"$(env -u BROWSER xdg-settings get default-web-browser)\" == \"helium.desktop\" ]]","action":"omarchy-default-browser helium >/dev/null 2>&1 || { env -u BROWSER xdg-settings set default-web-browser helium.desktop && omarchy-notification-send -g \udb81\udd9f 'Helium is now the default browser'; }"},
+}
