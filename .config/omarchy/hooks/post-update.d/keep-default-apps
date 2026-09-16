@@ -31,7 +31,15 @@ set -u
 
 terminal_entry="com.mitchellh.ghostty.desktop"
 terminal_list="$HOME/.config/xdg-terminals.list"
-browser_entry="helium-browser.desktop"
+# Helium's OWN desktop id, which is what it checks to decide whether it is the
+# default browser -- not merely a name that happens to resolve.
+#
+# Chromium-based browsers ask `xdg-settings check default-web-browser
+# <their own .desktop>`. Helium is built as helium.desktop (the name the
+# helium-browser-bin package installs), so pointing the default at any other
+# name -- including a perfectly working alias -- makes Helium decide it is not
+# the default and re-prompt forever, with no way to satisfy it from its own UI.
+browser_entry="helium.desktop"
 
 # --- Handler-name aliases ----------------------------------------------------
 # The two machines install the same apps under different .desktop NAMES:
@@ -82,6 +90,9 @@ ensure_alias() {
     { print }
   ' "$found" >"$apps_dir/$want.tmp" || { rm -f "$apps_dir/$want.tmp"; return 0; }
   mv "$apps_dir/$want.tmp" "$apps_dir/$want"
+  # awk inherits the caller's umask, which left these 600 when the hook ran from
+  # a restrictive shell. Desktop entries are world-readable by convention.
+  chmod 644 "$apps_dir/$want"
   echo "keep-default-apps: aliased $want -> $(basename "$found")"
 }
 
@@ -116,9 +127,13 @@ fi
 # chrome/brave/brave-origin/edge/firefox/zen), so set it through xdg-settings.
 # $BROWSER is omarchy-launch-browser and shadows xdg-settings' own lookup, hence
 # `env -u BROWSER`. omarchy-launch-webapp already whitelists helium*, so web apps
-# keep working. Skip entirely if the launcher is missing -- helium is a hand-made
-# .desktop pointing at an AppImage, not a package, so it may not exist here.
-if [[ -f $HOME/.local/share/applications/$browser_entry ]]; then
+# keep working. Skip entirely if the launcher is missing -- on the other machine
+# helium is a hand-made .desktop pointing at an AppImage, not a package.
+#
+# resolve_desktop, not a bare -f on ~/.local/share/applications: helium.desktop
+# is package-owned and lives in /usr/share/applications here, so the old
+# home-only test skipped this whole block and the browser was never re-asserted.
+if resolve_desktop "$browser_entry" >/dev/null; then
   current=$(env -u BROWSER xdg-settings get default-web-browser 2>/dev/null || true)
   if [[ $current != "$browser_entry" ]]; then
     if env -u BROWSER xdg-settings set default-web-browser "$browser_entry" 2>/dev/null; then
