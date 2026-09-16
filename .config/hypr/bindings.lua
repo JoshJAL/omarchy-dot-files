@@ -18,6 +18,16 @@ o.bind("SUPER + SHIFT + ALT + A", "Claude", { webapp = "https://claude.ai" })
 -- Toggle window split on SUPER+Y. Free in Omarchy 4, which uses SUPER+J.
 o.bind("SUPER + Y", "Toggle window split", hl.dsp.layout("togglesplit"))
 
+-- Window width save/restore on End. This keyboard has no Home key, and Omarchy 4
+-- puts both halves of the pair there (SUPER+Home restores, SUPER+ALT+Home saves),
+-- so neither was reachable. End is unbound everywhere in Omarchy 4, so the pair
+-- moves there keeping the same modifier split.
+hl.unbind("SUPER + Home")
+o.bind("SUPER + End", "Restore window width", "omarchy-hyprland-window-width restore")
+
+hl.unbind("SUPER + ALT + Home")
+o.bind("SUPER + ALT + End", "Save window width", "omarchy-hyprland-window-width save")
+
 -- Capture bindings on SUPER+SHIFT (this keyboard has no PrintScreen key).
 -- Omarchy 4 puts these on PRINT / SUPER+PRINT / SUPER+CTRL+PRINT.
 hl.unbind("SUPER + SHIFT + S") -- Omarchy 4: Google Maps
