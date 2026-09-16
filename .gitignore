@@ -74,6 +74,7 @@
 /.local/*
 !/.local/bin/
 /.local/bin/*
+!/.local/bin/hypr-window-reset-size
 !/.local/bin/keepawake-guard
 !/.local/bin/omarchy-launch-screensaver
 !/.local/bin/zed-launch
