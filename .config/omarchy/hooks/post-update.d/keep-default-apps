@@ -144,3 +144,12 @@ if resolve_desktop "$browser_entry" >/dev/null; then
     fi
   fi
 fi
+
+# --- Menu browser rows -------------------------------------------------------
+# A systemd user path unit (sync-browser-menu.path) already re-syncs these when
+# a .desktop appears or disappears. This is the backstop for the case that unit
+# cannot see: an update that changes which browsers Omarchy itself ships rows
+# for, which changes what counts as an "extra" row worth generating.
+if command -v sync-browser-menu >/dev/null 2>&1; then
+  sync-browser-menu || true
+fi

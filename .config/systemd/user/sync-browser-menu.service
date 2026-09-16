@@ -1,0 +1,12 @@
+[Unit]
+Description=Sync installed browsers into the Omarchy menu
+Documentation=https://github.com/omacom/omarchy/pull/12132
+
+# A pacman transaction rewrites many files at once, so the path unit can fire
+# several times in seconds. Without this, systemd's default start rate limit
+# would put the unit in a failed state and stop watching until reset.
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/sync-browser-menu
