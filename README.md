@@ -211,6 +211,15 @@ exists, with `NoDisplay=true` so it never shows up twice in a launcher, written 
 `~/.local/share/applications/` — deliberately untracked, since it is already full of generated
 webapp entries.
 
+**The default browser must be Helium's own desktop id, not an alias.** Chromium-based browsers
+decide whether they are the default by running `xdg-settings check default-web-browser` against
+*their own* `.desktop` name. Helium is built as `helium.desktop` (what `helium-browser-bin`
+installs), so while the default pointed at the working `helium-browser.desktop` alias, Helium
+concluded it was not the default and re-prompted forever, with no way to satisfy it from its own
+UI. Everything resolved and every link opened correctly — only self-recognition broke. So
+`mimeapps.list` and the hook both name `helium.desktop`; the aliases exist to make the *other*
+machine's name resolve, never to be the default itself.
+
 Consequences worth knowing:
 
 - `mimeapps.list` is byte-identical on both machines and needs no per-host override, no
