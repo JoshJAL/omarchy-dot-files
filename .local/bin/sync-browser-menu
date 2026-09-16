@@ -1,29 +1,35 @@
 #!/usr/bin/env python3
 """Keep Defaults > Browser in the Omarchy menu in sync with installed browsers.
 
-Omarchy's shipped menu (default/omarchy/omarchy-menu.jsonc) hardcodes one row
-per browser it knows about. The list is NOT derived from what is installed, so
-a browser it has never heard of -- Helium here -- simply never appears under
-Defaults > Browser, no matter how it was installed.
+Two problems, one script.
 
-The menu's own extension mechanism cannot fix that on its own: docs/menu.md is
-explicit that "an extension can point a submenu at an existing provider but
-cannot declare a new one", and the providers map lives in Menu.qml under
-/usr/share/omarchy. So there is no way to make the submenu enumerate browsers
-at runtime from user config. Instead this regenerates static rows into a
-managed block of the user extension, and something else re-runs it (a systemd
-path unit on the desktop-entry directories, plus the post-update hook).
+ROWS. Omarchy's shipped menu (default/omarchy/omarchy-menu.jsonc) hardcodes one
+row per browser it knows about. The list is NOT derived from what is installed,
+so a browser it has never heard of -- Helium here -- never appears under
+Defaults > Browser. The menu's extension mechanism cannot fix that on its own:
+docs/menu.md is explicit that "an extension can point a submenu at an existing
+provider but cannot declare a new one", and the providers map lives in Menu.qml
+under /usr/share/omarchy. So the rows are generated into a managed block of the
+user extension instead.
 
-Row identity matches what upstream would use -- setup.default.browser.<slug> --
-so if https://github.com/omacom/omarchy/pull/12132 lands, the generated row
-merges with the shipped one instead of duplicating it (mergeMenuSources
-overlays per key).
+ICONS. A row's icon is a FONT GLYPH, not an image: Menu.qml renders it as text
+in `iconFont`, and only rows from the QML-native `apps` provider get real image
+icons. Nerd Fonts has marks for Chrome, Firefox and Edge but none for Brave,
+Zen or Helium, which is why those fall back to a generic globe. So this traces
+each browser's own installed icon into a glyph and builds a small font from
+them, which the rows reference by family.
 
-A note on icons: these are FONT GLYPHS, not images. Menu.qml renders a row's
-icon as text (iconText, font.family), and only rows from the QML-native `apps`
-provider get real image icons via appIconImage. So a browser's own PNG cannot
-be used here. Known browsers get a Nerd Font brand glyph; everything else gets
-the generic globe -- which is what Omarchy itself uses for Brave and Zen.
+Tracing the icon the app ships -- rather than fetching a brand SVG by guessed
+name -- is deliberate: it cannot pick the wrong brand. Simple Icons' "helium"
+is the Helium IoT network, a completely different company from the browser.
+
+Row identity matches what upstream would use (setup.default.browser.<slug>), so
+if https://github.com/omacom/omarchy/pull/12132 lands, a generated row merges
+with the shipped one instead of duplicating it.
+
+Everything in the glyph path degrades to the generic globe on failure. A
+browser with an odd icon should lose its mark, never its row -- and a malformed
+extension would make the shell silently drop EVERY user entry.
 """
 
 import configparser
@@ -32,6 +38,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -40,36 +47,52 @@ EXT = os.path.expanduser("~/.config/omarchy/extensions/omarchy-menu.jsonc")
 BEGIN = "  // >>> sync-browser-menu: generated block, do not hand-edit >>>"
 END = "  // <<< sync-browser-menu <<<"
 
-APP_DIRS = [
-    os.path.expanduser("~/.local/share/applications"),
-    "/usr/share/applications",
+OMARCHY = os.environ.get("OMARCHY_PATH", "/usr/share/omarchy")
+SHIPPED_MENU = os.path.join(OMARCHY, "default/omarchy/omarchy-menu.jsonc")
+FONT_TOOL = os.path.join(OMARCHY, "bin/omarchy-dev-font")
+BASE_FONT = "/usr/share/fonts/omarchy/omarchy.ttf"
+
+FONT_DIR = os.path.expanduser("~/.local/share/fonts")
+FONT_FILE = os.path.join(FONT_DIR, "browser-marks.ttf")
+FONT_FAMILY = "Browser Marks"
+FIRST_CODEPOINT = 0xF100
+
+# Set when the glyph font on disk actually changed this run.
+FONT_CHANGED = False
+
+APP_DIRS = [os.path.expanduser("~/.local/share/applications"), "/usr/share/applications"]
+ICON_DIRS = [
+    os.path.expanduser("~/.local/share/icons/hicolor/256x256/apps"),
+    "/usr/share/icons/hicolor/256x256/apps",
+    "/usr/share/icons/hicolor/128x128/apps",
+    "/usr/share/icons/hicolor/scalable/apps",
+    "/usr/share/pixmaps",
 ]
 
-# Rows Omarchy already ships. Regenerating these would duplicate a shipped row
-# with a worse action, so they are left alone.
+GLOBE = "\U000f059f"  # nf-md-web, what Omarchy uses when it has no brand mark
+
+# Desktop id -> the slug Omarchy's own commands use. These already have rows.
 SHIPPED = {
-    "chromium.desktop",
-    "google-chrome.desktop",
-    "brave-browser.desktop",
-    "brave-origin.desktop",
-    "microsoft-edge.desktop",
-    "firefox.desktop",
-    "zen.desktop",
+    "chromium.desktop": "chromium",
+    "google-chrome.desktop": "chrome",
+    "brave-browser.desktop": "brave",
+    "brave-origin.desktop": "brave-origin",
+    "microsoft-edge.desktop": "edge",
+    "firefox.desktop": "firefox",
+    "zen.desktop": "zen",
 }
 
-GLOBE = "\U000f059f"  # nf-md-web, what Omarchy uses for Brave and Zen
-GLYPHS = {
-    "vivaldi": "\U000f059f",
-    "opera": "\U000f059f",
-    "librewolf": "\U000f0239",   # firefox glyph
-    "waterfox": "\U000f0239",
-    "floorp": "\U000f0239",
-    "tor": "\U000f059f",
-    "ungoogled-chromium": "",
-    "thorium": "",
-    "helium": "\U000f059f",
-}
 
+def run(cmd, **kw):
+    return subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL, **kw)
+
+
+def truthy(value):
+    return str(value or "").strip().lower() == "true"
+
+
+# ---------------------------------------------------------------- discovery
 
 def read_entry(path):
     cp = configparser.RawConfigParser(interpolation=None, strict=False)
@@ -80,69 +103,284 @@ def read_entry(path):
     return cp["Desktop Entry"] if cp.has_section("Desktop Entry") else None
 
 
-def truthy(value):
-    return str(value or "").strip().lower() == "true"
-
-
 def discover():
-    """Installed browsers, keyed by desktop id, first directory wins."""
+    """Installed browsers as (desktop_id, label, icon_name), first dir wins."""
     found, seen = [], set()
     for directory in APP_DIRS:
         for path in sorted(glob.glob(os.path.join(directory, "*.desktop"))):
             desktop_id = os.path.basename(path)
-            if desktop_id in seen or desktop_id in SHIPPED:
+            if desktop_id in seen:
                 continue
             entry = read_entry(path)
-            if entry is None:
+            if entry is None or "x-scheme-handler/http" not in entry.get("MimeType", ""):
                 continue
-            if "x-scheme-handler/http" not in entry.get("MimeType", ""):
-                continue
-            # NoDisplay hides an entry from launchers; it is how duplicate and
-            # alias entries mark themselves (com.google.Chrome.desktop next to
-            # google-chrome.desktop, and the helium-browser.desktop alias that
-            # keep-default-apps writes). Listing them would double up rows.
+            # NoDisplay is how duplicate and alias entries mark themselves --
+            # com.google.Chrome.desktop beside google-chrome.desktop, and the
+            # helium-browser.desktop alias keep-default-apps writes. Listing
+            # them would double up rows.
             if truthy(entry.get("NoDisplay")) or truthy(entry.get("Hidden")):
                 continue
             seen.add(desktop_id)
-            found.append((desktop_id, entry.get("Name", "") or desktop_id))
+            name = entry.get("Name", "") or desktop_id
+            # Omarchy's rows read "Brave" and "Zen", not "Brave Browser".
+            label = re.sub(r"\s+(Web\s+)?Browser$", "", name.strip()) or name.strip()
+            found.append((desktop_id, label, entry.get("Icon", "").strip()))
     return found
 
 
-def label_for(name):
-    # Omarchy's own rows read "Brave", "Zen", "Chrome" -- not "Brave Browser".
-    return re.sub(r"\s+(Web\s+)?Browser$", "", name.strip()) or name.strip()
-
-
 def slug_for(desktop_id):
-    return re.sub(r"[^a-z0-9-]+", "-", desktop_id[: -len(".desktop")].lower()).strip("-")
+    if desktop_id in SHIPPED:
+        return SHIPPED[desktop_id]
+    stem = desktop_id[: -len(".desktop")]
+    return re.sub(r"[^a-z0-9-]+", "-", stem.lower()).strip("-")
 
 
-def row_for(desktop_id, name):
-    slug = slug_for(desktop_id)
-    label = label_for(name)
-    icon = GLYPHS.get(slug, GLOBE)
+def shipped_globe_rows():
+    """Shipped browser rows still rendering with the generic globe: {slug: body}.
+
+    Read rather than hardcoded so this stops overriding a row the moment
+    Omarchy gives it a real mark (see PR #12137 for Brave and Zen).
+
+    The whole body is kept because an override has to restate it. The menu
+    merges user entries field by field, but normalizeItem() runs FIRST and
+    fills every missing key with a default -- and it derives the row's kind
+    from the action: `kind = value.action ? "action" : ... : "menu"`. So an
+    icon-only override silently blanks the action and demotes the row to an
+    empty submenu, which then vanishes, since a submenu with no visible
+    descendants disappears. Brave dropped out of the menu exactly this way.
+    """
+    try:
+        text = open(SHIPPED_MENU, encoding="utf-8").read()
+        text = re.sub(r"^\s*//.*$", "", text, flags=re.M)
+        text = re.sub(r",(\s*[}\]])", r"\1", text)
+        menu = json.loads(text)
+    except Exception:
+        return {}
+    out = {}
+    for key, body in menu.items():
+        if key.startswith("setup.default.browser.") and isinstance(body, dict):
+            if body.get("icon") == GLOBE:
+                out[key.rsplit(".", 1)[-1]] = body
+    return out
+
+
+# ------------------------------------------------------------------- icons
+
+def resolve_icon(icon_name):
+    if not icon_name:
+        return None
+    if os.path.isabs(icon_name) and os.path.exists(icon_name):
+        return icon_name
+    for directory in ICON_DIRS:
+        for ext in ("svg", "png"):
+            candidate = os.path.join(directory, f"{icon_name}.{ext}")
+            if os.path.exists(candidate):
+                return candidate
+    return None
+
+
+def trace_path(icon_path, workdir):
+    """Icon file -> an SVG path 'd' in a 0 0 256 256 box, or None."""
+    pbm = os.path.join(workdir, "mark.pbm")
+    svg = os.path.join(workdir, "mark.svg")
+
+    # Which polarity yields the MARK rather than its container? An icon that is
+    # mostly dark once flattened (Helium: a white asterisk on a filled blue
+    # square) must be trace the light pixels, or the glyph is just a square.
+    # An icon that is mostly light (Brave's lion on transparency) traces its
+    # dark pixels directly. Measured: Helium 0.68, Brave 0.41, Firefox 0.34.
+    probe = subprocess.run(
+        ["magick", icon_path, "-background", "white", "-alpha", "remove",
+         "-colorspace", "gray", "-threshold", "60%", "-format", "%[fx:1-mean]", "info:"],
+        capture_output=True, text=True)
+    try:
+        dark = float(probe.stdout.strip())
+    except ValueError:
+        return None
+
+    if dark > 0.55:
+        cmd = ["magick", icon_path, "-background", "black", "-alpha", "remove",
+               "-alpha", "off", "-colorspace", "gray", "-threshold", "60%", "-negate", pbm]
+    else:
+        cmd = ["magick", icon_path, "-background", "white", "-alpha", "remove",
+               "-alpha", "off", "-colorspace", "gray", "-threshold", "60%", pbm]
+    try:
+        run(cmd)
+        run(["potrace", "-s", "-o", svg, pbm])
+    except Exception:
+        return None
+
+    try:
+        data = open(svg, encoding="utf-8").read()
+    except OSError:
+        return None
+    paths = re.findall(r'<path[^>]*\bd="([^"]+)"', data)
+    box = re.search(r'viewBox="([\d.\s]+)"', data)
+    if not paths or not box:
+        return None
+    _, _, vbw, vbh = (float(v) for v in box.group(1).split())
+    return paths[0], vbw, vbh
+
+
+def contours_for(icon_path, odf, workdir):
+    """Traced icon -> TrueType contours, undoing potrace's group transform."""
+    traced = trace_path(icon_path, workdir)
+    if not traced:
+        return None
+    d, vbw, vbh = traced
+    try:
+        subpaths = odf.parse_path(d)
+    except Exception:
+        return None
+
+    # potrace wraps its output in translate(0,H) scale(0.1,-0.1) and
+    # svg_contours ignores group transforms, so apply it here: coordinates come
+    # out 10x and Y-up, which would otherwise render a giant upside-down glyph.
+    def tf(p):
+        return (p[0] * 0.1, vbh - p[1] * 0.1)
+
+    parts = []
+    for sub in subpaths:
+        for seg in sub:
+            pts = [tf(p) for p in seg[1:]]
+            if seg[0] == "M":
+                parts.append("M %.3f %.3f" % pts[0])
+            elif seg[0] == "L":
+                parts.append("L %.3f %.3f" % pts[0])
+            elif seg[0] == "C":
+                parts.append("C %.3f %.3f %.3f %.3f %.3f %.3f" % (*pts[0], *pts[1], *pts[2]))
+        parts.append("Z")
+    try:
+        contours = odf.contours_from_svg(" ".join(parts), (0.0, 0.0, vbw, vbh))
+    except Exception:
+        return None
+    return contours or None
+
+
+# -------------------------------------------------------------------- font
+
+def load_font_tool():
+    """Import Omarchy's glyph injector; it is plain stdlib Python."""
+    try:
+        import importlib.machinery
+        import importlib.util
+        loader = importlib.machinery.SourceFileLoader("odf", FONT_TOOL)
+        spec = importlib.util.spec_from_loader("odf", loader)
+        module = importlib.util.module_from_spec(spec)
+        loader.exec_module(module)
+        return module
+    except Exception:
+        return None
+
+
+def rename_family(name_table, family):
+    """Rewrite the `name` table so the font is its own family.
+
+    The base font is Omarchy's own, and two fonts claiming family "omarchy"
+    would make fontconfig's choice between them arbitrary. omarchy-dev-font
+    rebuilds glyf/loca/cmap/post/head but passes `name` through untouched, so
+    the rename has to happen here. assemble() fixes offsets and checksums.
+    """
+    fmt, count, storage_off = struct.unpack(">HHH", name_table[:6])
+    if fmt != 0:
+        raise ValueError("unsupported name table format %d" % fmt)
+
+    postscript = re.sub(r"[^A-Za-z0-9]", "", family)
+    records, storage = [], b""
+    for i in range(count):
+        off = 6 + i * 12
+        pid, eid, lid, nid, length, str_off = struct.unpack(">HHHHHH", name_table[off:off + 12])
+        value = name_table[storage_off + str_off: storage_off + str_off + length]
+        if nid in (1, 3, 4, 16):
+            text = family
+        elif nid == 6:
+            text = postscript
+        else:
+            text = None
+        if text is not None:
+            value = text.encode("utf-16-be") if pid == 3 else text.encode("ascii", "replace")
+        records.append((pid, eid, lid, nid, len(value), len(storage)))
+        storage += value
+
+    header = struct.pack(">HHH", 0, len(records), 6 + 12 * len(records))
+    body = b"".join(struct.pack(">HHHHHH", *r) for r in records)
+    return header + body + storage
+
+
+def build_font(marks, odf):
+    """marks: ordered [(slug, contours)] -> {slug: codepoint}, or {} on failure."""
+    if not marks or odf is None or not os.path.exists(BASE_FONT):
+        return {}
+    staged = None
+    try:
+        raw = open(BASE_FONT, "rb").read()
+        # read_tables reports {tag: (start, length)} into the raw bytes, while
+        # assemble wants {tag: bytes}, so slice before handing it back.
+        tables = {tag: raw[start:start + length]
+                  for tag, (start, length) in odf.read_tables(raw).items()}
+        tables["name"] = rename_family(tables["name"], FONT_FAMILY)
+        os.makedirs(FONT_DIR, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=FONT_DIR, delete=False, suffix=".ttf") as tmp:
+            tmp.write(odf.assemble(tables))
+            staged = tmp.name
+        assigned = {}
+        for index, (slug, contours) in enumerate(marks):
+            codepoint = FIRST_CODEPOINT + index
+            odf.add_glyph(staged, codepoint, "browser-%s" % slug, contours)
+            assigned[slug] = codepoint
+        os.chmod(staged, 0o644)
+        previous = b""
+        if os.path.exists(FONT_FILE):
+            previous = open(FONT_FILE, "rb").read()
+        changed = previous != open(staged, "rb").read()
+        os.replace(staged, FONT_FILE)
+        if changed:
+            subprocess.run(["fc-cache", "-f", FONT_DIR], check=False,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            global FONT_CHANGED
+            FONT_CHANGED = True
+        return assigned
+    except Exception as exc:
+        print("sync-browser-menu: glyph font failed (%s); using the globe" % exc,
+              file=sys.stderr)
+        if staged:
+            try:
+                os.unlink(staged)
+            except OSError:
+                pass
+        return {}
+
+
+# -------------------------------------------------------------------- rows
+
+def row_for(desktop_id, label, slug, icon, icon_font, shipped):
+    if shipped is not None:
+        # Restate the shipped row verbatim and swap only the icon; omitting a
+        # field blanks it (see shipped_globe_rows).
+        body = dict(shipped)
+        body["icon"] = icon
+        if icon_font:
+            body["iconFont"] = icon_font
+        elif "iconFont" in body:
+            del body["iconFont"]
+        return f"setup.default.browser.{slug}", body
+
+    body = {"icon": icon}
+    if icon_font:
+        body["iconFont"] = icon_font
+    body["label"] = label
     # Try Omarchy's own command first so the row upgrades itself (and regains
     # its notification) if Omarchy learns this browser; fall back to
     # xdg-settings, which works for any desktop id. Both streams are discarded
-    # because omarchy-default-browser prints usage to stdout, not stderr.
-    action = (
+    # because omarchy-default-browser prints its usage to stdout, not stderr.
+    body["checked"] = ('[[ "$(env -u BROWSER xdg-settings get default-web-browser)" == '
+                       f'"{desktop_id}" ]]')
+    body["action"] = (
         f"omarchy-default-browser {slug} >/dev/null 2>&1 || "
         f"{{ env -u BROWSER xdg-settings set default-web-browser {desktop_id} && "
         f"omarchy-notification-send -g {icon} '{label} is now the default browser'; }}"
     )
-    # Ask xdg-settings rather than omarchy-default-browser: that command reports
-    # a bare desktop id for browsers it does not know, and the short name for
-    # ones it does. The desktop id is stable either way.
-    checked = (
-        '[[ "$(env -u BROWSER xdg-settings get default-web-browser)" == '
-        f'"{desktop_id}" ]]'
-    )
-    return f"setup.default.browser.{slug}", {
-        "icon": icon,
-        "label": label,
-        "checked": checked,
-        "action": action,
-    }
+    return f"setup.default.browser.{slug}", body
 
 
 def render(rows):
@@ -163,22 +401,51 @@ def splice(original, block):
         head, rest = original.split(BEGIN, 1)
         _, tail = rest.split(END, 1)
         return head + block + tail
-    # First run: insert before the final closing brace.
-    idx = original.rstrip().rfind("}")
-    if idx == -1:
+    index = original.rstrip().rfind("}")
+    if index == -1:
         raise SystemExit("sync-browser-menu: extension file has no closing brace")
-    return original.rstrip()[:idx] + block + "\n}\n"
+    return original.rstrip()[:index] + block + "\n}\n"
 
 
 def main():
     if not os.path.exists(EXT):
-        print(f"sync-browser-menu: {EXT} missing, nothing to do", file=sys.stderr)
+        print("sync-browser-menu: %s missing, nothing to do" % EXT, file=sys.stderr)
         return 0
 
-    original = open(EXT, encoding="utf-8").read()
-    rows = [row_for(d, n) for d, n in discover()]
-    updated = splice(original, render(rows))
+    browsers = discover()
+    globes = shipped_globe_rows()
+    odf = load_font_tool()
 
+    # A glyph is worth making for a browser Omarchy has no row for at all, and
+    # for one whose shipped row is still using the generic globe.
+    wanted, marks = [], []
+    with tempfile.TemporaryDirectory() as workdir:
+        for desktop_id, label, icon_name in browsers:
+            slug = slug_for(desktop_id)
+            shipped = None
+            if desktop_id in SHIPPED:
+                if slug not in globes:
+                    continue  # already has a proper mark upstream
+                shipped = globes[slug]
+            contours = None
+            icon_path = resolve_icon(icon_name)
+            if icon_path and odf is not None:
+                contours = contours_for(icon_path, odf, workdir)
+            wanted.append((desktop_id, label, slug, shipped))
+            if contours:
+                marks.append((slug, contours))
+        assigned = build_font(marks, odf)
+
+    rows = []
+    for desktop_id, label, slug, shipped in wanted:
+        if slug in assigned:
+            icon, icon_font = chr(assigned[slug]), FONT_FAMILY
+        else:
+            icon, icon_font = GLOBE, None
+        rows.append(row_for(desktop_id, label, slug, icon, icon_font, shipped))
+
+    original = open(EXT, encoding="utf-8").read()
+    updated = splice(original, render(rows))
     if updated == original:
         return 0
 
@@ -187,24 +454,34 @@ def main():
     try:
         parsed = json.loads(strip_jsonc(updated))
     except json.JSONDecodeError as exc:
-        print(f"sync-browser-menu: refusing to write invalid JSONC: {exc}", file=sys.stderr)
+        print("sync-browser-menu: refusing to write invalid JSONC: %s" % exc, file=sys.stderr)
         return 1
     for key, _ in rows:
         if key not in parsed:
-            print(f"sync-browser-menu: {key} missing after render", file=sys.stderr)
+            print("sync-browser-menu: %s missing after render" % key, file=sys.stderr)
             return 1
 
-    directory = os.path.dirname(EXT)
-    with tempfile.NamedTemporaryFile("w", dir=directory, delete=False, encoding="utf-8") as tmp:
+    with tempfile.NamedTemporaryFile("w", dir=os.path.dirname(EXT), delete=False,
+                                     encoding="utf-8") as tmp:
         tmp.write(updated)
-        temp_path = tmp.name
-    shutil.copymode(EXT, temp_path)
-    os.replace(temp_path, EXT)
+        staged = tmp.name
+    shutil.copymode(EXT, staged)
+    os.replace(staged, EXT)
 
-    names = ", ".join(body["label"] for _, body in rows) or "none"
-    print(f"sync-browser-menu: {len(rows)} extra browser row(s): {names}")
+    described = ", ".join(
+        "%s%s" % (label, "" if slug in assigned else " (globe)")
+        for _, label, slug, _ in wanted) or "none"
+    print("sync-browser-menu: %d row(s): %s" % (len(rows), described))
     subprocess.run(["omarchy", "menu", "refresh"], check=False,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if FONT_CHANGED:
+        # Qt resolves font families once at startup, so a family that appeared
+        # (or whose glyphs changed) since then renders as a fallback character
+        # until the shell restarts -- Helium's mark came out as a stray "»".
+        # Only on an actual font change, which is rare: installing a browser.
+        print("sync-browser-menu: glyph font changed, restarting the shell")
+        subprocess.run(["omarchy", "restart", "shell"], check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return 0
 
 
