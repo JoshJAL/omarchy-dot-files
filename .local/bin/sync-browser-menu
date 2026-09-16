@@ -80,6 +80,10 @@ SHIPPED = {
     "microsoft-edge.desktop": "edge",
     "firefox.desktop": "firefox",
     "zen.desktop": "zen",
+    # Omarchy expects zen.desktop; a hand-installed Zen ships zen-browser.desktop.
+    # Mapping it to the same slug re-icons the shipped row instead of adding a
+    # second one beside it.
+    "zen-browser.desktop": "zen",
 }
 
 
@@ -103,6 +107,21 @@ def read_entry(path):
     return cp["Desktop Entry"] if cp.has_section("Desktop Entry") else None
 
 
+def is_browser(entry):
+    """Claims the http scheme, or declares itself a WebBrowser.
+
+    The scheme handler alone is not enough: Zen is installed here by hand and
+    its desktop entry lists only text/html, so it was skipped and kept the
+    generic globe. Categories=...WebBrowser... is declared by every browser on
+    this machine, hand-made ones included, and does not match editors that
+    merely open HTML.
+    """
+    if "x-scheme-handler/http" in entry.get("MimeType", ""):
+        return True
+    cats = [c.strip().lower() for c in entry.get("Categories", "").split(";")]
+    return "webbrowser" in cats
+
+
 def discover():
     """Installed browsers as (desktop_id, label, icon_name), first dir wins."""
     found, seen = [], set()
@@ -112,7 +131,7 @@ def discover():
             if desktop_id in seen:
                 continue
             entry = read_entry(path)
-            if entry is None or "x-scheme-handler/http" not in entry.get("MimeType", ""):
+            if entry is None or not is_browser(entry):
                 continue
             # NoDisplay is how duplicate and alias entries mark themselves --
             # com.google.Chrome.desktop beside google-chrome.desktop, and the
