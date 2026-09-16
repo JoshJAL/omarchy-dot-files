@@ -222,10 +222,30 @@ Row ids match what upstream would use (`setup.default.browser.<slug>`), so if
 [PR #12132](https://github.com/omacom/omarchy/pull/12132) lands, a generated row merges with the
 shipped one instead of duplicating it.
 
-**Icons are font glyphs, not the browser's own icon.** `Menu.qml` renders a row's `icon` as text
-in a font; only rows from the QML-native `apps` provider get real image icons. So a browser's PNG
-cannot be used here. Known browsers get a Nerd Font brand glyph and everything else gets the
-generic globe — which is what Omarchy itself uses for Brave and Zen.
+**Icons are font glyphs, so the browser's own icon is traced into one.** `Menu.qml` renders a
+row's `icon` as text in the family named by `iconFont`; only rows from the QML-native `apps`
+provider get real image icons, so a PNG cannot be used directly. Nerd Fonts has marks for Chrome,
+Firefox and Edge but none for Brave, Zen or Helium, which is why those fall back to a globe.
+
+So `sync-browser-menu` traces each browser's installed icon with `potrace`, injects the outline as
+a glyph using Omarchy's own `omarchy-dev-font` (pure stdlib — it parses SVG path data and writes
+TTF tables itself), and builds `~/.local/share/fonts/browser-marks.ttf`. Rows reference it by
+family. Tracing the icon the app ships is deliberate: fetching a brand SVG by guessed name can
+silently return the wrong logo — Simple Icons' `helium` is the Helium IoT network, a different
+company from the browser.
+
+Two details that cost real debugging:
+
+- The base font is Omarchy's own, so its `name` table is rewritten to claim a distinct family.
+  `omarchy-dev-font` rebuilds `glyf`/`loca`/`cmap`/`post`/`head` but passes `name` through
+  untouched, and two fonts claiming `omarchy` would make fontconfig's choice arbitrary.
+- Overriding a shipped row must restate it **in full**. The menu merges user entries field by
+  field, but `normalizeItem()` runs first and fills every missing key with a default — and derives
+  the row's kind from its action. An icon-only override blanks the action, demotes the row to an
+  empty submenu, and the row then vanishes. Brave disappeared from the menu exactly this way.
+
+Qt resolves font families at startup, so the sync restarts the shell — but only when the glyph
+font actually changed, which means only when a browser is installed or removed.
 
 On a new machine the unit needs enabling once:
 

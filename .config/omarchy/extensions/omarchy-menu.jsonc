@@ -29,6 +29,7 @@
   // "about": {"icon":"","label":"About","action":"omarchy-launch-or-focus-tui \"zsh -c 'fastfetch; read -k 1'\""},
 
   // >>> sync-browser-menu: generated block, do not hand-edit >>>
-  "setup.default.browser.helium": {"icon": "󰖟", "label": "Helium", "checked": "[[ \"$(env -u BROWSER xdg-settings get default-web-browser)\" == \"helium.desktop\" ]]", "action": "omarchy-default-browser helium >/dev/null 2>&1 || { env -u BROWSER xdg-settings set default-web-browser helium.desktop && omarchy-notification-send -g 󰖟 'Helium is now the default browser'; }"},
+  "setup.default.browser.brave": {"icon": "", "label": "Brave", "when": "omarchy-cmd-present brave", "checked": "[[ \"$(omarchy-default-browser)\" == \"brave\" ]]", "action": "omarchy-default-browser brave", "iconFont": "Browser Marks"},
+  "setup.default.browser.helium": {"icon": "", "iconFont": "Browser Marks", "label": "Helium", "checked": "[[ \"$(env -u BROWSER xdg-settings get default-web-browser)\" == \"helium.desktop\" ]]", "action": "omarchy-default-browser helium >/dev/null 2>&1 || { env -u BROWSER xdg-settings set default-web-browser helium.desktop && omarchy-notification-send -g  'Helium is now the default browser'; }"},
   // <<< sync-browser-menu <<<
 }
