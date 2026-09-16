@@ -108,6 +108,24 @@ own `coordinatorKey`, which is what makes them close each other correctly.
 
 ## Other notes
 
+- **A bar-widget plugin never gets `shell.appLibrary`.** `shell.qml` hands it
+  only to plugins whose manifest declares the `"menu"` kind, so `bar.shell.appLibrary`
+  is `null` here and `IconModel.iconUrlFor()` has to do the job itself:
+  absolute `Icon=` paths become percent-encoded `file://` URLs, names go through
+  `Quickshell.iconPath()`, and the last stop is `application-x-executable`.
+  Going through `Quickshell.iconPath()` alone returns `""` for both an absolute
+  path and an unknown name, and an empty `Image.source` is what dropped windows
+  through to the letter fallback.
+- **Chromium web apps have no `StartupWMClass` and no desktop id.** A `--app=URL`
+  window's class is built from the URL — `host + "_" + path` with every
+  filename-illegal character replaced by `_`, wrapped as
+  `<browser>-<app name>-<profile>`, so `https://teams.microsoft.com/v2/` arrives
+  as `chrome-teams.microsoft.com__v2_-Default`. The only link back to the
+  `.desktop` is the URL on its `Exec` line. `IconModel` matches on that, comparing
+  alphanumerics-only keys by **common prefix** rather than equality: the mangling
+  is lossy (a URL that went through desktop-entry field-code stripping arrives
+  with `%2F` as `F`), and prefix length is also what separates two entries on one
+  host, such as Outlook mail from Outlook calendar.
 - Quickshell reports `HyprlandToplevel.address` **without** the `0x` prefix, but
   Hyprland's `address:` selector requires it. Mismatched, dispatches fail
   *silently* — a warning and exit 0. `Dispatch.selector()` normalizes it.
