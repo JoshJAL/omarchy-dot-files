@@ -20,9 +20,7 @@ Item {
 
   readonly property string iconName: IconModel.iconNameFor(DesktopEntries, root.appClass, root.overrides)
   readonly property bool symbolic: IconModel.isSymbolic(root.iconName)
-  readonly property string iconUrl: root.appLibrary
-    ? root.appLibrary.iconSource(root.iconName)
-    : Quickshell.iconPath(root.iconName, true)
+  readonly property string iconUrl: IconModel.iconUrlFor(Quickshell, root.appLibrary, root.iconName)
 
   implicitWidth: root.size
   implicitHeight: root.size
@@ -62,4 +60,5 @@ Item {
     renderType: Text.NativeRendering
     textFormat: Text.PlainText
   }
+
 }
