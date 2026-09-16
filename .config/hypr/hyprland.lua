@@ -114,7 +114,7 @@ require("default.hypr.toggles")
 -- dmabuf frames that Intel's EGL (the GPU Hyprland composites on) cannot import.
 -- Symptom was eglCreateImage EGL_BAD_MATCH ~30x/sec in every Chromium/Electron
 -- app: stutter, missing page styles, unscrollable pages.
--- Measured on sofwerx.org: 908 EGL failures/16s default, 0 with iHD.
+-- Measured on one media-heavy page: 908 EGL failures/16s default, 0 with iHD.
 -- Benefits Slack, 1Password and other Electron apps too, not just browsers.
 --
 -- Desktop note: iHD_drv_video.so is not even installed there. Setting this
