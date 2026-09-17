@@ -51,6 +51,12 @@ o.bind("SUPER + SHIFT + I", "Color picker", "pkill hyprpicker || hyprpicker -a")
 hl.unbind("SUPER + S") -- Omarchy 4: Toggle scratchpad
 o.bind("SUPER + S", "Random screensaver", os.getenv("HOME") .. "/.local/bin/omarchy-launch-screensaver")
 
+-- Taking SUPER+S above left the scratchpad with no way back: SUPER+ALT+S still
+-- sends a window to special:scratchpad, but nothing reveals it again, and every
+-- other SUPER+<mods>+S is spoken for (screenshot, share, move-to-scratchpad).
+-- SUPER+grave is unbound and is the usual Quake-style drop-down key anyway.
+o.bind("SUPER + grave", "Toggle scratchpad", hl.dsp.workspace.toggle_special("scratchpad"))
+
 -- Workspace cycling stays on the focused monitor. Omarchy 4 binds these to
 -- e+1/e-1, which walk every open workspace across all displays -- with three
 -- monitors that means Tab can yank focus onto a different screen. "m+1"/"m-1"
