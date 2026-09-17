@@ -46,7 +46,12 @@ browser_entry="helium.desktop"
 #
 #   helium   packaged helium.desktop here; hand-made helium-browser.desktop
 #            (AppImage) on the other box
-#   t3code   t3code-url-handler.desktop here; t3code.desktop there
+#   t3code   t3code-url-handler.desktop here; t3code.desktop there --
+#            and, since t3code-bin 0.0.42-2 moved the app-id to reverse-DNS,
+#            com.t3tools.T3Code.desktop, which the app writes itself on launch
+#            and points mimeapps.list at. That name exists only where the app
+#            has actually run, so the tracked mimeapps.list would name a
+#            handler the other machine cannot resolve.
 #
 # ~/.config/mimeapps.list is tracked and shared, so it can only name one of
 # each -- and naming one that does not resolve does NOT error. It falls through
@@ -98,8 +103,13 @@ ensure_alias() {
 
 ensure_alias helium-browser.desktop helium.desktop
 ensure_alias helium.desktop helium-browser.desktop
-ensure_alias t3code.desktop t3code-url-handler.desktop
-ensure_alias t3code-url-handler.desktop t3code.desktop
+# All three t3code names alias to each other, so whichever one mimeapps.list
+# happens to name resolves on both machines. The app rewrites that line to
+# com.t3tools.T3Code.desktop on launch, so this is the name most likely to be
+# in the tracked file and least likely to exist anywhere else.
+ensure_alias t3code.desktop t3code-url-handler.desktop com.t3tools.T3Code.desktop
+ensure_alias t3code-url-handler.desktop t3code.desktop com.t3tools.T3Code.desktop
+ensure_alias com.t3tools.T3Code.desktop t3code-url-handler.desktop t3code.desktop
 
 command -v update-desktop-database >/dev/null 2>&1 && \
   update-desktop-database "$apps_dir" 2>/dev/null || true
