@@ -9,4 +9,20 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=oneshot
+
+# The path unit fires on an mtime change, which during a package upgrade
+# happens WHILE ALPM is still rewriting /usr/share/applications. Scanning then
+# can glob the directory in the window where the old .desktop is gone and the
+# new one is not yet written, and conclude the browser was uninstalled --
+# silently deleting its row. That is how Brave vanished from the menu on
+# 2026-09-17: this service started at 10:31:46, pacman upgraded brave-bin at
+# 10:31:47, and the sync wrote "2 row(s): Helium, Zen" at 10:31:49.
+#
+# The helper exits 0 even on timeout: being late is recoverable, refusing to
+# run is not.
+ExecStartPre=%h/.local/bin/wait-for-pacman-lock
 ExecStart=%h/.local/bin/sync-browser-menu
+
+# Must exceed the helper's own 600s ceiling, or systemd kills the unit while it
+# is legitimately waiting out a long `omarchy update`.
+TimeoutStartSec=900
