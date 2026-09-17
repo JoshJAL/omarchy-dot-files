@@ -22,7 +22,7 @@ All are optional and hot-reload when `shell.json` is saved.
 | `iconSize` | `14` | Icon size, matching the old waybar `icon-size`. |
 | `iconSizeMin` | `10` | Floor that icons shrink to as the window count grows. |
 | `maxIcons` | `0` | Show at most this many icons; the rest collapse behind a "+N" chip. `0` = unlimited. A count rather than a width because a plugin cannot measure the room it has — `ModuleSlot` asks the widget for its `implicitWidth`, so the constraint only ever flows upward, and `PluginBarApi` carries no geometry. |
-| `includeSpecial` | `false` | Include scratchpad / special workspaces. |
+| `includeSpecial` | `false` | Include scratchpad / special workspaces. Parked windows get a badge, sort last, appear on **every** bar regardless of `allOutputs`, and restore on left click. See *Scratchpad* below. |
 | `allOutputs` | `false` | Off, each monitor's taskbar lists only its own windows. On, every taskbar lists every window — so the same window appears on all of them. |
 | `sortBy` | `"workspace"` | `"workspace"` groups by workspace, then by first-seen order. `"creation"` drops the workspace term and orders purely by age, so icons keep their slot when a window changes workspace. |
 | `showTitles` | `false` | Draw the window title beside each icon. Ignored on vertical bars — there is no width to spend on it. |
@@ -38,11 +38,48 @@ of *the monitor whose taskbar you clicked*, since one widget instance exists per
 screen. An unrecognised action string falls through to `focus`, so a typo
 degrades to an ordinary click instead of a dead icon.
 
+## Scratchpad
+
+With `includeSpecial` on, a window parked in a special workspace appears with an
+accent dot on its outer corner, and **left-clicking it brings it back** to the
+workspace in front of you rather than focusing it in place.
+
+Three deliberate departures from how ordinary windows are treated:
+
+- **Parked windows ignore the monitor filter.** Hyprland pins a special
+  workspace to whatever monitor it was opened on, but nothing about the
+  scratchpad is per-monitor from the user's side: one key stows from anywhere
+  and restores to wherever you are. Honouring the pin would show the icon only
+  on a screen you may not be looking at, which is the exact failure the
+  indicator exists to prevent. So they appear on every bar.
+- **They sort last, not first.** Special workspaces carry negative ids, so the
+  default `sortBy: "workspace"` would otherwise sort them to the front and shove
+  every ordinary icon right the moment you park something. `sortBy: "creation"`
+  is exempt — that mode promises icons keep their slot, and forcing specials
+  last would break the one guarantee it exists to make.
+- **They do not dim.** A parked window is not inactive, it is elsewhere.
+  `dimInactive` would make the badge fight a faded icon and read as merely
+  unfocused, which is the one thing it must not look like.
+
+**Why this exists.** `SUPER+ALT+S` sends the focused window to
+`special:scratchpad` with no feedback of any kind — the window simply vanishes.
+Press it, see nothing happen, press again, and Hyprland has meanwhile moved
+focus to the next window on that workspace, so the second press takes that one
+too. Three presses empties a workspace and looks exactly like a bug. The badge
+is the missing feedback.
+
+The companion half is `~/.local/bin/hypr-scratchpad-toggle` on `SUPER+grave`:
+empty scratchpad stows the focused window, occupied scratchpad restores all of
+it. Omarchy's stock `hl.dsp.workspace.toggle_special` only *reveals* the
+scratchpad as an overlay — the window never leaves it — which is why it is not
+bound here.
+
 ## Behavior
 
 - **Scope:** every window on this monitor, across all of its workspaces. A bar
   exists per monitor, so each instance filters to its own.
-- **Left click** focuses, **middle click** closes, **right click** opens a menu:
+- **Left click** focuses — or restores, if the window is parked in a
+  scratchpad. **Middle click** closes, **right click** opens a menu:
   Close window · Move to workspace ▸ · Toggle floating · Move to `<monitor>`.
   Moving to a workspace **follows** the window, matching `SUPER+SHIFT+n`; moving
   to a monitor does not, since the window becomes visible there anyway and
@@ -176,3 +213,17 @@ bar. Logic, state and churn all validate fine in the sandbox.
 
 `delegateCreations` on the widget root is the churn probe: if it climbs while
 windows are merely changing title, the incremental sync has regressed.
+
+**Two mock-bar names that fail silently.** `WidgetButton` reads
+`bar.barForeground`, *not* `bar.foreground`, and the Color singleton exposes
+`Color.bar.text`, *not* `Color.bar.foreground`. Get either wrong and QML assigns
+undefined to a color property with only a warning, then renders a default close
+enough to miss. `WidgetButton` also calls `bar.showTooltip`/`bar.hideTooltip`
+unconditionally, so a mock lacking them throws a TypeError on every pointer
+movement and buries every real warning in the noise. The harness defines all of
+them; a clean run is one portal warning and nothing else.
+
+The harness window is itself a Hyprland toplevel, so it lists itself in its own
+taskbar — and if a special workspace is revealed when it opens, Hyprland places
+it there and it shows up flagged special. The live bar is a layer surface, not a
+toplevel, so it never lists itself.

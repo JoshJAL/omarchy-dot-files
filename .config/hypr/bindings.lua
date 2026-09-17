@@ -55,7 +55,14 @@ o.bind("SUPER + S", "Random screensaver", os.getenv("HOME") .. "/.local/bin/omar
 -- sends a window to special:scratchpad, but nothing reveals it again, and every
 -- other SUPER+<mods>+S is spoken for (screenshot, share, move-to-scratchpad).
 -- SUPER+grave is unbound and is the usual Quake-style drop-down key anyway.
-o.bind("SUPER + grave", "Toggle scratchpad", hl.dsp.workspace.toggle_special("scratchpad"))
+--
+-- Not hl.dsp.workspace.toggle_special: that only *reveals* the scratchpad as an
+-- overlay and the window never leaves it, so there is still no way to get a
+-- window properly back. The script is a real round trip -- empty scratchpad
+-- stows the focused window, occupied scratchpad empties onto the workspace in
+-- front of you. Absolute path for the same reason as the bindings above: the
+-- exec dispatcher gets no login shell, so ~/.local/bin is not on PATH.
+o.bind("SUPER + grave", "Scratchpad stow/restore", os.getenv("HOME") .. "/.local/bin/hypr-scratchpad-toggle")
 
 -- Workspace cycling stays on the focused monitor. Omarchy 4 binds these to
 -- e+1/e-1, which walk every open workspace across all displays -- with three

@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Two-way scratchpad toggle for SUPER+grave.
+#
+# Omarchy 4 binds SUPER+S to hl.dsp.workspace.toggle_special, which only
+# *reveals* the scratchpad as an overlay -- the window never leaves it. That is
+# not what you want from a stow key, and this config rebound SUPER+S to the
+# screensaver anyway.
+#
+# This is the round trip on one key:
+#
+#   scratchpad empty  -> stow the focused window
+#   scratchpad has N  -> restore all N onto the workspace you are looking at
+#
+# SUPER+ALT+S remains the explicit one-window stow, which is what you want when
+# something is already parked and you want to park a second thing beside it.
+#
+# Every special workspace counts, not just "scratchpad": Hyprland allows many,
+# they all carry negative ids, and a window stranded on one you have no key for
+# is exactly the trap this script exists to prevent.
+#
+# Lua dispatcher dialect: this Hyprland parses `hyprctl dispatch movetoworkspace 1`
+# as a syntax error. The hl.dsp.* form is mandatory. Addresses from `hyprctl -j`
+# already carry the 0x prefix that the address: selector requires.
+set -euo pipefail
+
+readonly SCRATCHPAD="special:scratchpad"
+
+die() { printf '%s: %s\n' "${0##*/}" "$1" >&2; exit 1; }
+
+command -v jq >/dev/null || die "jq not found"
+
+move_to() { # address workspace
+  hyprctl dispatch "hl.dsp.window.move({ window = \"address:$1\", workspace = \"$2\", follow = false })" >/dev/null
+}
+
+mapfile -t parked < <(hyprctl -j clients | jq -r '.[] | select(.workspace.id < 0) | .address')
+
+if (( ${#parked[@]} == 0 )); then
+  # Nothing parked: stow whatever has focus. A bare desktop has no active
+  # window and `.address` comes back empty -- a no-op, not an error.
+  focused=$(hyprctl -j activewindow | jq -r '.address // empty')
+  [[ -n $focused ]] || exit 0
+  move_to "$focused" "$SCRATCHPAD"
+  exit 0
+fi
+
+# Restore. The destination is the active workspace of the FOCUSED monitor, not
+# a global "active workspace" -- with three monitors those differ, and guessing
+# wrong flings the windows onto a screen you are not looking at.
+target=$(hyprctl -j monitors | jq -r '.[] | select(.focused) | .activeWorkspace.id')
+[[ -n $target ]] || die "no focused monitor"
+
+for addr in "${parked[@]}"; do
+  move_to "$addr" "$target"
+done
+
+# Land focus on the last one restored, so the round trip ends somewhere useful
+# instead of on whatever happened to hold focus before.
+hyprctl dispatch "hl.dsp.focus({ window = \"address:${parked[-1]}\" })" >/dev/null
