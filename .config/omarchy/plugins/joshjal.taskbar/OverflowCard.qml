@@ -32,6 +32,7 @@ PopupCard {
         required property string address
         required property string title
         required property string appClass
+        required property bool special
         required property int index
 
         width: column.width
@@ -59,11 +60,23 @@ PopupCard {
           tint: card.fg
         }
 
+        Rectangle {
+          id: rowBadge
+          visible: overflowRow.special
+          anchors.verticalCenter: parent.verticalCenter
+          anchors.right: parent.right
+          anchors.rightMargin: Style.space(8)
+          width: Style.space(5)
+          height: width
+          radius: width / 2
+          color: card.host && card.host.bar ? card.host.bar.urgent : Color.urgent
+        }
+
         Text {
           anchors.verticalCenter: parent.verticalCenter
           anchors.left: rowIcon.right
           anchors.leftMargin: Style.space(8)
-          anchors.right: parent.right
+          anchors.right: rowBadge.visible ? rowBadge.left : parent.right
           anchors.rightMargin: Style.space(8)
           text: overflowRow.title
           textFormat: Text.PlainText
@@ -90,6 +103,10 @@ PopupCard {
               card.host.runClickAction(card.host.rightClick, card.anchorItem, overflowRow.address)
             } else if (mouse.button === Qt.MiddleButton) {
               card.host.runClickAction(card.host.middleClick, card.anchorItem, overflowRow.address)
+            } else if (overflowRow.special) {
+              // Same rule as the bar buttons: a parked window has no useful
+              // focus, so a left click brings it back instead.
+              card.host.bringWindow(overflowRow.address)
             } else {
               card.host.focusWindow(overflowRow.address)
             }

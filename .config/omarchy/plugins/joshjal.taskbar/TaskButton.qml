@@ -17,6 +17,7 @@ BarIconButton {
   required property string appClass
   required property bool urgent
   required property bool activated
+  required property bool special
   required property int index
 
   property var host: null
@@ -46,7 +47,13 @@ BarIconButton {
   // Inactive windows read back, the focused one reads forward. With
   // dimInactive off every window reads forward and only the urgent marker and
   // the bar's own hover treatment distinguish them.
-  opacity: (!button.host || button.host.dimInactive) && !button.activated ? 0.5 : 1.0
+  //
+  // A parked window opts out: it is not "inactive", it is elsewhere. Dimming it
+  // would make the badge fight a faded icon for attention and read as merely
+  // unfocused -- the one thing this indicator must not look like.
+  opacity: button.special
+    ? 1.0
+    : ((!button.host || button.host.dimInactive) && !button.activated ? 0.5 : 1.0)
   Behavior on opacity { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
 
   Component.onCompleted: if (button.host) button.host.delegateCreations++
@@ -141,6 +148,13 @@ BarIconButton {
       button.host.runClickAction(button.host.rightClick, button, button.address)
     else if (which === Qt.MiddleButton)
       button.host.runClickAction(button.host.middleClick, button, button.address)
+    else if (button.special)
+      // A parked window has no useful "focus": it lives on a hidden workspace,
+      // so focusing it either reveals an overlay it stays trapped in or does
+      // nothing at all. Bringing it to the workspace in front of you is the
+      // only action a click here can mean. Not routed through runClickAction:
+      // there is no sensible alternative to configure.
+      button.host.bringWindow(button.address)
     else
       button.host.focusWindow(button.address)
   }
@@ -149,6 +163,39 @@ BarIconButton {
     if (!button.host) return
     if (button.tooltipHovered) button.host.requestPreview(button, button.address)
     else button.host.cancelPreview(button, button.address)
+  }
+
+  // Parked-in-scratchpad badge. A dot on the outer corner, because with the
+  // window hidden this is the only evidence it exists at all -- the failure it
+  // fixes is pressing SUPER+ALT+S, seeing nothing happen, and pressing again
+  // until the workspace is empty.
+  //
+  // Opposite edge from the urgent marker: a parked window can also be urgent,
+  // and two markers on one edge would sit on top of each other.
+  Rectangle {
+    visible: button.special
+    color: button.bar ? button.bar.urgent : Color.urgent
+    radius: width / 2
+    width: Math.max(4, Math.round(button.iconPixelSize * 0.32))
+    height: width
+    z: 2
+    x: button.vertical
+      ? (button.bar && button.bar.position === "left" ? Style.space(2) : button.width - width - Style.space(2))
+      : button.width - width - Style.space(2)
+    y: button.vertical
+      ? button.height - height - Style.space(2)
+      : (button.bar && button.bar.position === "bottom" ? button.height - height - Style.space(2) : Style.space(2))
+
+    // The dot has to stay legible against whatever the icon underneath it is,
+    // so it carries a ring in the bar background rather than sitting flush.
+    Rectangle {
+      anchors.centerIn: parent
+      width: parent.width + 2
+      height: parent.height + 2
+      radius: width / 2
+      z: -1
+      color: Color.bar ? Color.bar.background : "transparent"
+    }
   }
 
   // Urgent marker on the bar's inner edge. Geometry mirrors the open-panel

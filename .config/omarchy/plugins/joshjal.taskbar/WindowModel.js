@@ -64,7 +64,7 @@ function pendingCount(values) {
 //    first element inserted -- a null or undefined at that moment poisons the
 //    role for the life of the process, and rows carrying keys the model has
 //    never seen are silently dropped with a warning.
-var ROLES = ["title", "appClass", "workspaceId", "floating", "urgent", "activated", "seq"]
+var ROLES = ["title", "appClass", "workspaceId", "special", "floating", "urgent", "activated", "seq"]
 
 function row(tl, workspaceId, seq) {
   var ipc = ipcOf(tl)
@@ -73,6 +73,11 @@ function row(tl, workspaceId, seq) {
     title: String(tl.title || ""),
     appClass: String(classOf(tl) || ""),
     workspaceId: Number(workspaceId),
+    // Hyprland gives every special workspace a negative id. Derived here rather
+    // than by name so it covers ALL special workspaces, not just one called
+    // "scratchpad" -- a window stranded on an unnamed one is exactly the case
+    // the indicator exists to surface.
+    special: Number(workspaceId) < 0,
     floating: ipc.floating === true,
     urgent: tl.urgent === true,
     activated: tl.activated === true,
@@ -116,8 +121,18 @@ function forMonitor(values, monitorId, opts) {
     var wsId = workspaceIdOf(tl)
     if (wsId === null) continue
     // Special/scratchpad workspaces carry negative ids.
-    if (!includeSpecial && wsId < 0) continue
-    if (!allOutputs && monitorIdOf(tl) !== Number(monitorId)) continue
+    var special = wsId < 0
+    if (!includeSpecial && special) continue
+    // Special windows are exempt from the monitor filter, deliberately.
+    //
+    // Hyprland pins a special workspace to whatever monitor it was opened on
+    // (`hyprctl monitors` reports special:scratchpad against a specific output),
+    // but nothing about the scratchpad is per-monitor from the user's side: one
+    // key stows from anywhere and restores to wherever you are. Honouring the
+    // pin would show the icon only on the bar of a screen you may not be
+    // looking at -- which is the precise failure this indicator exists to
+    // prevent. So a parked window appears on EVERY bar.
+    if (!allOutputs && !special && monitorIdOf(tl) !== Number(monitorId)) continue
 
     var addr = String(tl.address || "")
     if (!addr) continue
@@ -126,8 +141,18 @@ function forMonitor(values, monitorId, opts) {
     out.push(row(tl, wsId, seq))
   }
 
+  // Negative ids would otherwise sort special windows to the FRONT and shove
+  // every ordinary icon right the moment you park something. Parked windows
+  // belong at the end, where parking appends an icon instead of reshuffling the
+  // row. Only the workspace term is affected: "creation" promises that icons
+  // keep their slot as windows move, and forcing specials last would break that
+  // promise for the one mode that exists to guarantee it.
+  function workspaceKey(r) {
+    return r.special ? Number.MAX_SAFE_INTEGER : r.workspaceId
+  }
+
   out.sort(function (a, b) {
-    if (!byCreation && a.workspaceId !== b.workspaceId) return a.workspaceId - b.workspaceId
+    if (!byCreation && workspaceKey(a) !== workspaceKey(b)) return workspaceKey(a) - workspaceKey(b)
     if (a.seq !== b.seq) return a.seq - b.seq
     return a.address < b.address ? -1 : (a.address > b.address ? 1 : 0)
   })

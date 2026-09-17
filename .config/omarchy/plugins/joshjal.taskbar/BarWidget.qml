@@ -68,6 +68,11 @@ BarWidget {
   ListModel { id: windowModel }
   readonly property int windowCount: windowModel.count
 
+  // Read-only handle for the sandbox harness. A QML `id` is scoped to its own
+  // component, so without this the model is invisible from outside -- and with
+  // no pointer synthesis on this machine, inspecting the model IS the test.
+  readonly property alias model: windowModel
+
   // Bumped only when a sync actually changed something, so a no-op sync wakes
   // no bindings.
   property int modelRevision: 0
