@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Block until no pacman transaction is in flight, then let a little dust settle.
+#
+# Why this exists: systemd .path units fire on an mtime change, which during a
+# package upgrade happens WHILE ALPM is still rewriting the directory. A unit
+# that scans /usr/share/applications on that trigger can glob it in the window
+# where the old .desktop has been removed and the new one not yet written, and
+# conclude the application is gone.
+#
+# That is not hypothetical. On 2026-09-17 sync-browser-menu started at 10:31:46,
+# pacman upgraded brave-bin at 10:31:47, and the script wrote "2 row(s): Helium,
+# Zen" at 10:31:49 -- silently deleting Brave's row from the Omarchy menu for an
+# application that was installed the whole time.
+#
+# Exits 0 in every case, including timeout. A caller that waited as long as it
+# reasonably can should still do its work: being late is recoverable, refusing
+# to run is not.
+set -uo pipefail
+
+# Overridable only so the wait loop itself is testable without root; nothing
+# in production sets it.
+readonly LOCK="${WAIT_PACMAN_LOCK:-/var/lib/pacman/db.lck}"
+# Generous: `omarchy update` is a full-system transaction and can run for
+# several minutes on a slow mirror.
+readonly TIMEOUT_SECS="${WAIT_PACMAN_TIMEOUT:-600}"
+# ALPM releases the lock before its post-transaction hooks (update-desktop-
+# database, icon cache) have finished touching the tree. Two seconds is enough
+# for the filesystem writes that matter here and is imperceptible in a unit
+# that already runs on a background trigger.
+readonly SETTLE_SECS="${WAIT_PACMAN_SETTLE:-2}"
+
+waited=0
+while [ -e "$LOCK" ]; do
+  if [ "$waited" -ge "$TIMEOUT_SECS" ]; then
+    printf '%s: pacman lock still held after %ss, continuing anyway\n' \
+      "${0##*/}" "$TIMEOUT_SECS" >&2
+    break
+  fi
+  sleep 1
+  waited=$((waited + 1))
+done
+
+[ "$waited" -gt 0 ] && printf '%s: waited %ss for pacman\n' "${0##*/}" "$waited" >&2
+
+sleep "$SETTLE_SECS"
+exit 0
