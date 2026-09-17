@@ -29,6 +29,14 @@
 !/NEW-MACHINE.md
 !/hypr-quattro-port/
 
+# Development harness for the joshjal.taskbar bar widget. Tracked because it
+# went missing once and had to be rebuilt from the plugin README: a crash in a
+# live bar widget takes the whole Omarchy shell down with it, so the harness is
+# the only safe place to iterate. Its Commons/ and Ui/ symlinks point into
+# /usr/share/omarchy (system-wide, recreated by the omarchy package); taskbar/
+# is relative, so a clone under any username resolves it.
+!/taskbar-sandbox/
+
 # --- ~/.config -------------------------------------------------------------
 !/.config/
 /.config/*
