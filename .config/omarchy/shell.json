@@ -32,7 +32,10 @@
         {
           "id": "joshjal.taskbar",
           "previewDelay": 320,
-          "includeSpecial": true
+          "includeSpecial": true,
+          "classIconOverrides": {
+            "com.t3tools.T3Code": "t3code"
+          }
         }
       ],
       "right": [
