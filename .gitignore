@@ -85,6 +85,7 @@
 /.local/bin/*
 !/.local/bin/hypr-scratchpad-toggle
 !/.local/bin/hypr-window-reset-size
+!/.local/bin/hypr-workspace-close-all
 !/.local/bin/keepawake-guard
 !/.local/bin/omarchy-launch-screensaver
 !/.local/bin/repo-lag
