@@ -1,0 +1,216 @@
+#!/usr/bin/env bash
+#
+# repo-lag — find out WHICH distribution layer a package is stuck at.
+#
+# Usage:
+#   repo-lag           print a table of everything currently lagging
+#   repo-lag --quiet   print nothing unless something lags (used by the hook)
+#
+# WHY THIS EXISTS
+#
+# `omarchy update` compares installed-vs-available exactly one layer deep, and
+# it uses two different tools that each see half the picture:
+#
+#   pacman -Syu   compares you against the repos. Blind to the AUR.
+#   yay    -Sua   compares you against the AUR -- but ONLY for foreign packages
+#                 (pacman -Qm). Anything served by the omarchy repo is not
+#                 foreign, so yay never looks at it.
+#
+# Nothing on the box compares the OMARCHY REPO against the AUR. That is a real
+# blind spot, not a theoretical one: mise-bin sat at 2026.9.9 for two days while
+# the AUR had 2026.9.11, and every `omarchy update` in that window reported
+# "there is nothing to do" -- truthfully, from where each tool was looking.
+#
+# So this script walks the whole chain and names the layer that is behind:
+#
+#   upstream  ->  AUR  ->  omarchy repo  ->  you
+#                  ^          ^              ^
+#                  |          |              `- pacman -Syu / yay -Sua cover this
+#                  |          `- NOBODY CHECKS THIS
+#                  `- the AUR's own OutOfDate flag stands in for upstream
+#
+# Using the AUR's OutOfDate flag as the upstream signal is deliberate. Checking
+# true upstream would need a hand-maintained map of package -> release feed
+# (GitHub API for one, Google's version history for another, ...) that rots
+# every time a project changes how it publishes. The flag is free, already in
+# the API response, and catches the same cases a few hours later.
+#
+# REPO ORDER MATTERS, AND IT BITES. [omarchy] is listed LAST in pacman.conf,
+# after core/extra/multilib, and pacman resolves a name to the FIRST repo that
+# carries it. So when a package exists in both, the Arch build wins and the
+# omarchy build is unreachable no matter how much newer it is:
+#
+#   extra    ghostty 1.3.1-2   <- installed, and what pacman -Syu keeps picking
+#   omarchy  ghostty 1.3.1-3   <- newer, shadowed, will never install
+#
+# Comparing against the omarchy copy therefore reports upgrades that `pacman
+# -Syu` will not perform. Layer 1 below compares against the EFFECTIVE version
+# (first repo in config order wins, exactly as pacman resolves it), and the
+# shadowed-newer-build case gets its own verdict instead of a false alarm.
+#
+# NOT ALL LAG IS A BUG. Omarchy deliberately pins and repackages some things --
+# 1password ships as 8.12.36-2 against the AUR's 8.12.36-42, same upstream
+# version, different pkgrel. Put those in the ignore file so the report stays
+# short enough to be worth reading.
+#
+# Read-only: installs nothing, changes nothing, takes no pacman lock.
+
+set -uo pipefail   # deliberately NOT -e: a missing package is expected, not fatal
+
+QUIET=0
+for arg in "$@"; do
+  case "$arg" in
+    -q|--quiet) QUIET=1 ;;
+    -h|--help)  sed -n '2,8p' "$0" | sed 's/^# \?//'; exit 0 ;;
+    *) echo "unknown flag: $arg" >&2; exit 2 ;;
+  esac
+done
+
+IGNORE_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/repo-lag/ignore"
+
+# --------------------------------------------------------------------------
+# Gather local state. Two cheap pacman queries, no network yet.
+# --------------------------------------------------------------------------
+declare -A INSTALLED OMARCHY EFFECTIVE EFFECTIVE_REPO IGNORED
+
+while read -r name version; do
+  INSTALLED["$name"]="$version"
+done < <(pacman -Q 2>/dev/null)
+
+# pacman -Sl walks repos in pacman.conf order, so the FIRST time a name appears
+# is the copy pacman would actually install. Later repos are shadowed.
+while read -r repo name version _rest; do
+  [[ $repo == omarchy ]] && OMARCHY["$name"]="$version"
+  if [[ -z ${EFFECTIVE[$name]:-} ]]; then
+    EFFECTIVE["$name"]="$version"
+    EFFECTIVE_REPO["$name"]="$repo"
+  fi
+done < <(pacman -Sl 2>/dev/null)
+
+if [[ -f $IGNORE_FILE ]]; then
+  while read -r line; do
+    line="${line%%#*}"                    # strip comments
+    line="$(echo "$line" | tr -d '[:space:]')"
+    [[ -n $line ]] && IGNORED["$line"]=1
+  done < "$IGNORE_FILE"
+fi
+
+# Candidates are packages that COULD have an AUR counterpart: everything the
+# omarchy repo serves that is installed, plus every foreign (AUR) package.
+# Anything else -- core, extra, multilib -- has no AUR layer to lag behind.
+declare -A CANDIDATE
+for name in $(pacman -Qmq 2>/dev/null); do
+  CANDIDATE["$name"]=1
+done
+for name in "${!OMARCHY[@]}"; do
+  [[ -n ${INSTALLED[$name]:-} ]] && CANDIDATE["$name"]=1
+done
+for name in "${!IGNORED[@]}"; do
+  unset 'CANDIDATE[$name]'
+done
+
+CHECKED=${#CANDIDATE[@]}
+if (( CHECKED == 0 )); then
+  (( QUIET )) || echo "Nothing to check."
+  exit 0
+fi
+
+# --------------------------------------------------------------------------
+# Ask the AUR about all of them at once. Reuse Omarchy's own reachability
+# helper so an offline machine fails the same way the updater does.
+# --------------------------------------------------------------------------
+if ! omarchy-pkg-aur-accessible 2>/dev/null; then
+  (( QUIET )) || echo "AUR is unavailable (so skipping repo-lag check)" >&2
+  exit 0
+fi
+
+AUR_JSON="$(mktemp)"
+trap 'rm -f "$AUR_JSON"' EXIT
+echo '[]' > "$AUR_JSON"
+
+# Chunked at 100 so the URL stays well inside limits as the box grows.
+names=("${!CANDIDATE[@]}")
+for ((i = 0; i < ${#names[@]}; i += 100)); do
+  query=""
+  for name in "${names[@]:i:100}"; do
+    query+="&arg[]=$name"
+  done
+
+  chunk="$(curl -sf --connect-timeout 30 --retry 3 --retry-delay 3 -A "repo-lag" \
+    "https://aur.archlinux.org/rpc/v5/info?${query#&}")" || {
+    (( QUIET )) || echo "AUR query failed" >&2
+    exit 0
+  }
+
+  merged="$(jq -s '.[0] + (.[1].results // [])' "$AUR_JSON" <(echo "$chunk"))" || exit 0
+  echo "$merged" > "$AUR_JSON"
+done
+
+declare -A AUR_VER AUR_OOD
+while IFS=$'\t' read -r name version ood; do
+  AUR_VER["$name"]="$version"
+  [[ $ood != "null" ]] && AUR_OOD["$name"]="$ood"
+done < <(jq -r '.[] | [.Name, .Version, (.OutOfDate // "null")] | @tsv' "$AUR_JSON")
+
+# --------------------------------------------------------------------------
+# Compare each layer. Every verdict names exactly one layer, so a package that
+# is behind for two different reasons says so twice rather than ambiguously.
+# --------------------------------------------------------------------------
+NOW=$(date +%s)
+rows=""
+
+for name in $(printf '%s\n' "${!CANDIDATE[@]}" | sort); do
+  inst="${INSTALLED[$name]:-}"
+  om="${OMARCHY[$name]:-}"
+  eff="${EFFECTIVE[$name]:-}"
+  eff_repo="${EFFECTIVE_REPO[$name]:-}"
+  aur="${AUR_VER[$name]:-}"
+  verdicts=()
+
+  # Layer 1: are you behind a version your own channels would actually install?
+  # Compared against the EFFECTIVE copy, so a shadowed omarchy build never
+  # masquerades as an available upgrade.
+  if [[ -n $eff ]] && (( $(vercmp "$inst" "$eff") < 0 )); then
+    verdicts+=("update available (pacman -Syu)")
+  elif [[ -z $eff && -n $aur ]] && (( $(vercmp "$inst" "$aur") < 0 )); then
+    verdicts+=("update available (yay -Sua)")
+  fi
+
+  # Layer 1b: omarchy built something newer, but repo order makes it unreachable.
+  if [[ -n $om && -n $eff && $eff_repo != omarchy ]] && (( $(vercmp "$eff" "$om") < 0 )); then
+    verdicts+=("omarchy build $om shadowed by $eff_repo $eff")
+  fi
+
+  # Layer 2: the blind spot -- omarchy repo trailing the AUR.
+  if [[ -n $om && -n $aur ]] && (( $(vercmp "$om" "$aur") < 0 )); then
+    verdicts+=("omarchy repo behind AUR")
+  fi
+
+  # Layer 3: the AUR itself trailing upstream, per its own flag.
+  if [[ -n ${AUR_OOD[$name]:-} ]]; then
+    days=$(( (NOW - AUR_OOD[$name]) / 86400 ))
+    verdicts+=("AUR flagged out-of-date (${days}d)")
+  fi
+
+  (( ${#verdicts[@]} )) || continue
+
+  joined="$(IFS='; '; echo "${verdicts[*]}")"
+  rows+="$name	$inst	${om:---}	${aur:---}	$joined"$'\n'
+done
+
+# --------------------------------------------------------------------------
+# Report. Under --quiet a clean box prints nothing at all, so the post-update
+# hook adds no noise to an update that genuinely had nothing to do.
+# --------------------------------------------------------------------------
+if [[ -z $rows ]]; then
+  (( QUIET )) || echo "Nothing lagging / $CHECKED checked"
+  exit 0
+fi
+
+LAGGING=$(printf '%s' "$rows" | grep -c '')
+{
+  printf 'PACKAGE\tINSTALLED\tOMARCHY\tAUR\tVERDICT\n'
+  printf '%s' "$rows"
+} | column -t -s $'\t' -o '  '
+echo
+echo "$LAGGING lagging / $CHECKED checked"

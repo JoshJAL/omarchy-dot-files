@@ -1,0 +1,15 @@
+# Packages repo-lag should not report, one name per line.
+#
+# Not all lag is a bug. Omarchy deliberately pins and repackages some things,
+# and those show as "behind" forever because the version strings genuinely
+# differ. Listing them here keeps the report short enough to stay worth reading.
+#
+# A pkgrel-only gap is the usual sign of a deliberate pin: same upstream
+# version, different trailing -N. For example, at the time of writing:
+#
+#   1password   installed 8.12.36-2   vs   AUR 8.12.36-42
+#
+# That is Omarchy repackaging 8.12.36, not a stale build -- a reasonable
+# candidate for this list. Left commented out so it stays your call.
+#
+# 1password
