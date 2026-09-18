@@ -74,6 +74,19 @@ o.bind("SUPER + TAB", "Next workspace on this monitor", hl.dsp.focus({ workspace
 hl.unbind("SUPER + SHIFT + TAB") -- Omarchy 4: Previous workspace (e-1, all monitors)
 o.bind("SUPER + SHIFT + TAB", "Previous workspace on this monitor", hl.dsp.focus({ workspace = "m-1" }))
 
+-- Close every window on the focused workspace. Omarchy 4 has SUPER+W for one
+-- window and CTRL+ALT+DELETE for every window on every workspace -- on three
+-- monitors the latter wipes all three screens and dumps you on workspace 1, so
+-- there was nothing for "clear the screen I am looking at". SUPER+ALT+W is the
+-- only free slot left in the W family (SHIFT=Typora, CTRL=Network,
+-- CTRL+ALT=Weather) and reads as the escalation of SUPER+W next door.
+--
+-- Two or more windows get a confirmation listing the count and the apps;
+-- a single window closes outright, same as SUPER+W. Absolute path for the same
+-- reason as the bindings above: the exec dispatcher gets no login shell, so the
+-- PATH entry for ~/.local/bin is not there.
+o.bind("SUPER + ALT + W", "Close all windows on workspace", os.getenv("HOME") .. "/.local/bin/hypr-workspace-close-all")
+
 -- Dropped from the old config, deliberately:
 --
 --   SUPER+L -> hyprlock. hyprlock is gone in Quattro and Omarchy 4 already

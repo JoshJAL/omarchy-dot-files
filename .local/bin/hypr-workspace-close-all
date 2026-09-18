@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# Close every window on the workspace you are looking at.
+#
+# Omarchy 4 ships two close keys and neither one does this:
+#
+#   SUPER + W            closes the focused window.
+#   CTRL + ALT + DELETE  runs omarchy-hyprland-window-close-all, which walks
+#                        *every* client on *every* workspace and then jumps to
+#                        workspace 1. On three monitors that wipes all three
+#                        screens at once, which is almost never what you want.
+#
+# This is the middle ground: one workspace, the one holding focus, and the view
+# does not move afterwards.
+#
+# Target selection follows the focused *window*, not the focused monitor's
+# activeWorkspace. Those two differ whenever a special workspace (the
+# scratchpad) is showing: `hyprctl activeworkspace` keeps reporting the regular
+# workspace underneath it, so keying off the monitor would close the windows
+# hidden *behind* the scratchpad you are actually looking at. The monitor is
+# only the fallback for a bare workspace, where the answer is "nothing".
+#
+# Lua dispatcher dialect: this Hyprland parses `hyprctl dispatch closewindow
+# address:0x...` as a syntax error. The hl.dsp.* form is mandatory. Addresses
+# out of `hyprctl -j` already carry the 0x prefix that the address: selector
+# wants.
+set -euo pipefail
+
+# Confirm before closing this many windows or more. One window is the same
+# stakes as SUPER + W, so it goes straight through.
+readonly CONFIRM_THRESHOLD=2
+
+# \U, not \u: these live above U+FFFF and bash's \u takes only four hex digits,
+# which would silently truncate U+F0156 to U+F015 plus a literal "6".
+readonly GLYPH_CLOSE=$'\U000F0156'  # nf-md-close
+readonly GLYPH_CANCEL=$'\U000F073A' # nf-md-cancel
+
+die() { printf '%s: %s\n' "${0##*/}" "$1" >&2; exit 1; }
+
+command -v jq >/dev/null || die "jq not found"
+
+# The workspace under focus. `.workspace.id` comes back null on a bare desktop,
+# where activewindow is an empty object.
+ws=$(hyprctl -j activewindow | jq -r '.workspace.id // empty')
+if [[ -z $ws ]]; then
+  ws=$(hyprctl -j monitors | jq -r 'first(.[] | select(.focused) | .activeWorkspace.id) // empty')
+fi
+[[ -n $ws ]] || die "no focused monitor"
+
+# Negative ids are special workspaces, whose name ("special:scratchpad") reads
+# better than the number. For a regular workspace the name is just the number.
+ws_name=$(hyprctl -j workspaces |
+  jq -r --argjson id "$ws" 'first(.[] | select(.id == $id) | .name) // empty')
+ws_label=${ws_name:-$ws}
+
+clients=$(hyprctl -j clients)
+
+mapfile -t addrs < <(jq -r --argjson id "$ws" \
+  '.[] | select(.workspace.id == $id) | .address' <<<"$clients")
+
+count=${#addrs[@]}
+
+if (( count == 0 )); then
+  omarchy-notification-send -g "$GLYPH_CLOSE" \
+    "Nothing to close" "Workspace $ws_label has no windows." -t 2000
+  exit 0
+fi
+
+if (( count >= CONFIRM_THRESHOLD )); then
+  # A readable roster for the confirmation subtext. Window classes are the only
+  # stable identity Hyprland hands out, but Omarchy's webapps carry generated
+  # ones like "chrome-outlook.office.com__mail_0_inbox_id_AAQ...-Default", so
+  # they get trimmed down to the recognisable part:
+  #
+  #   chrome-teams.microsoft.com__v2_-Default -> Teams
+  #   com.mitchellh.ghostty                   -> Ghostty
+  #   chromium                                -> Chromium
+  #
+  # Reverse-DNS classes are read right-to-left, everything else left-to-right.
+  # Duplicates collapse to a count so twelve Chromium windows stay one row.
+  summary=$(jq -r --argjson id "$ws" '
+    def pretty:
+      (. // "") | sub("^chrome-"; "") | sub("-Default$"; "") | split("_")[0]
+      | if test("^(com|org|net|io|dev|app|sh|me|gg|xyz)\\.") then (split(".") | last)
+        else split(".")[0] end
+      | if . == "" then "Unknown" else (.[0:1] | ascii_upcase) + .[1:] end;
+
+    [ .[] | select(.workspace.id == $id) | .class | pretty ]
+    | group_by(.) | map({name: .[0], n: length}) | sort_by(-.n, .name)
+    | (if length > 4 then .[0:4] else . end
+       | map(if .n > 1 then "\(.name) ×\(.n)" else .name end))
+      + (if length > 4 then ["+\(length - 4) more"] else [] end)
+    | join(" · ")
+  ' <<<"$clients")
+
+  # Cancel leads, so the preselected row is the harmless one -- this closes
+  # more than Omarchy's own ConfirmDialog ever does. Enter on the second row,
+  # or just type "clo", to go through; Escape backs out and exits 1.
+  choice=$(omarchy-menu-select "Close $count windows on workspace $ws_label?" \
+    "$GLYPH_CANCEL"$'\t'"Cancel" \
+    "$GLYPH_CLOSE"$'\t'"Close $count windows"$'\t'"$summary") || exit 0
+
+  # A row with a subtext comes back as "<label>\t<subtext>".
+  [[ ${choice%%$'\t'*} == "Close $count windows" ]] || exit 0
+fi
+
+# Deliberately the snapshot the confirmation was counted from, not a fresh
+# query: a window that opened while the dialog was up was never in the number
+# you agreed to, so it survives.
+for addr in "${addrs[@]}"; do
+  hyprctl dispatch "hl.dsp.window.close({ window = \"address:$addr\" })" >/dev/null
+done
