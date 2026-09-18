@@ -13,3 +13,20 @@
 # candidate for this list. Left commented out so it stays your call.
 #
 # 1password
+
+# Shadowed omarchy builds, each verified 2026-09-18 as harmless on THIS machine.
+# [omarchy] is last in pacman.conf, so these never install; that is correct here.
+#
+#   ghostty*  omarchy 1.3.1-3 is a strict SUBSET of extra 1.3.1-2 -- same upstream
+#             1.3.1, 658 files vs 668, missing the man pages and HTML/md docs.
+#
+#   linux-firmware-cirrus
+#             omarchy 20260810-3 is a strict SUPERSET of core -2: +99 Cirrus smart
+#             amp blobs (cs35l41/54/56) keyed to ASUS/HP/Lenovo/Dell subsystem IDs.
+#             This is a System76 Oryx Pro (Clevo 1558:66a2) with a Realtek ALC1220
+#             and no cs35l* modules -- zero of the 99 files match any ID on this
+#             box. Revisit if the machine ever changes.
+ghostty
+ghostty-shell-integration
+ghostty-terminfo
+linux-firmware-cirrus
