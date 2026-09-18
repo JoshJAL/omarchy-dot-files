@@ -45,6 +45,7 @@
 !/.config/kitty/
 !/.config/git/
 !/.config/mise/
+!/.config/repo-lag/
 !/.config/brave-flags.conf
 !/.config/brave-origin-beta-flags.conf
 !/.config/chrome-flags.conf
@@ -86,6 +87,7 @@
 !/.local/bin/hypr-window-reset-size
 !/.local/bin/keepawake-guard
 !/.local/bin/omarchy-launch-screensaver
+!/.local/bin/repo-lag
 !/.local/bin/wait-for-pacman-lock
 !/.local/bin/zed-launch
 !/.local/share/

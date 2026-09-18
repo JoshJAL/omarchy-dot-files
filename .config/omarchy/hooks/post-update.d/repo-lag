@@ -1,0 +1,25 @@
+#!/bin/bash
+
+# Report packages whose newest version has not reached this machine yet.
+#
+# `omarchy update` finishes by telling you what it upgraded, but it can only
+# see one layer: pacman -Syu checks the omarchy repo, yay -Sua checks the AUR
+# for foreign packages only. Neither compares the omarchy repo AGAINST the AUR,
+# so a package the omarchy builders have not rebuilt yet reports as "nothing to
+# do" indefinitely. mise-bin sat two versions behind for two days that way.
+#
+# Printing this here -- immediately after the updater has said it is done -- is
+# the whole point: that is the moment you would otherwise conclude the machine
+# is current.
+#
+# Silent when nothing lags, so a genuinely clean update stays clean.
+
+REPO_LAG="$HOME/.local/bin/repo-lag"
+[[ -x $REPO_LAG ]] || exit 0
+
+out=$("$REPO_LAG" --quiet 2>/dev/null)
+[[ -n $out ]] || exit 0
+
+echo -e "\e[32m\nRepo lag\e[0m"
+echo "$out"
+exit 0
