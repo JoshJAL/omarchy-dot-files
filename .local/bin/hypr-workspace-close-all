@@ -77,11 +77,21 @@ if (( count >= CONFIRM_THRESHOLD )); then
   #
   # Reverse-DNS classes are read right-to-left, everything else left-to-right.
   # Duplicates collapse to a count so twelve Chromium windows stay one row.
+  #
+  # Every step below has to survive a window with no class at all. Those are
+  # real: a Chromium profile failure fills a workspace with "Profile error
+  # occurred" dialogs whose class is "". jq's `split` on an empty string is
+  # `[]`, not `[""]`, so the old `split("_")[0]` handed `null` to `test`, which
+  # is a hard jq error ("null cannot be matched, as it is not a string"). Under
+  # `set -e` that killed the whole command at this assignment -- the
+  # confirmation never appeared and not one window closed.
   summary=$(jq -r --argjson id "$ws" '
     def pretty:
-      (. // "") | sub("^chrome-"; "") | sub("-Default$"; "") | split("_")[0]
-      | if test("^(com|org|net|io|dev|app|sh|me|gg|xyz)\\.") then (split(".") | last)
-        else split(".")[0] end
+      (. // "") | sub("^chrome-"; "") | sub("-Default$"; "")
+      | (split("_") | first) // ""
+      | if . == "" then ""
+        elif test("^(com|org|net|io|dev|app|sh|me|gg|xyz)\\.") then ((split(".") | last) // "")
+        else ((split(".") | first) // "") end
       | if . == "" then "Unknown" else (.[0:1] | ascii_upcase) + .[1:] end;
 
     [ .[] | select(.workspace.id == $id) | .class | pretty ]
@@ -90,14 +100,20 @@ if (( count >= CONFIRM_THRESHOLD )); then
        | map(if .n > 1 then "\(.name) ×\(.n)" else .name end))
       + (if length > 4 then ["+\(length - 4) more"] else [] end)
     | join(" · ")
-  ' <<<"$clients")
+  ' <<<"$clients" 2>/dev/null) || summary=""
 
   # Cancel leads, so the preselected row is the harmless one -- this closes
   # more than Omarchy's own ConfirmDialog ever does. Enter on the second row,
   # or just type "clo", to go through; Escape backs out and exits 1.
+  # The roster is decoration; the confirmation is the feature. If jq ever
+  # chokes on a class again, the dialog still has to come up -- a missing
+  # subtext is a far better failure than a key that silently does nothing.
+  close_row="$GLYPH_CLOSE"$'\t'"Close $count windows"
+  [[ -n $summary ]] && close_row+=$'\t'"$summary"
+
   choice=$(omarchy-menu-select "Close $count windows on workspace $ws_label?" \
     "$GLYPH_CANCEL"$'\t'"Cancel" \
-    "$GLYPH_CLOSE"$'\t'"Close $count windows"$'\t'"$summary") || exit 0
+    "$close_row") || exit 0
 
   # A row with a subtext comes back as "<label>\t<subtext>".
   [[ ${choice%%$'\t'*} == "Close $count windows" ]] || exit 0
