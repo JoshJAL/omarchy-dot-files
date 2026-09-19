@@ -51,4 +51,4 @@ x-scheme-handler/slack=slack.desktop
 x-scheme-handler/t3code-dev=t3code.desktop
 
 [Added Associations]
-x-scheme-handler/t3code=t3code.desktop;com.t3tools.T3Code.desktop;
+x-scheme-handler/t3code=t3code.desktop;
