@@ -27,6 +27,7 @@
 !/.gitignore
 !/README.md
 !/NEW-MACHINE.md
+!/FOR_AGENT.md
 !/hypr-quattro-port/
 
 # Development harness for the joshjal.taskbar bar widget. Tracked because it
@@ -83,12 +84,14 @@
 /.local/*
 !/.local/bin/
 /.local/bin/*
+!/.local/bin/desktop-entry-present
 !/.local/bin/hypr-scratchpad-toggle
 !/.local/bin/hypr-window-reset-size
 !/.local/bin/hypr-workspace-close-all
 !/.local/bin/keepawake-guard
 !/.local/bin/omarchy-launch-screensaver
 !/.local/bin/repo-lag
+!/.local/bin/sync-browser-menu
 !/.local/bin/wait-for-pacman-lock
 !/.local/bin/zed-launch
 !/.local/share/
