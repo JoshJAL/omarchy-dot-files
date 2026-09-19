@@ -7,6 +7,14 @@ Description=Watch desktop entries for installed/removed browsers
 # rewrites the menu only when the browser set actually changed.
 PathModified=/usr/share/applications
 PathModified=%h/.local/share/applications
+# Flatpak and /usr/local export elsewhere, and installing a browser there
+# changed nothing the unit was watching -- the row appeared only when some
+# unrelated pacman transaction happened to touch one of the two directories
+# above. systemd watches the nearest existing parent for a path that does not
+# exist yet, so listing these is safe on a machine with no flatpak.
+PathModified=%h/.local/share/flatpak/exports/share/applications
+PathModified=/var/lib/flatpak/exports/share/applications
+PathModified=/usr/local/share/applications
 Unit=sync-browser-menu.service
 
 [Install]
