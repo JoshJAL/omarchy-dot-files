@@ -60,13 +60,43 @@ FIRST_CODEPOINT = 0xF100
 # Set when the glyph font on disk actually changed this run.
 FONT_CHANGED = False
 
-APP_DIRS = [os.path.expanduser("~/.local/share/applications"), "/usr/share/applications"]
+def data_roots():
+    """XDG data roots, most specific first.
+
+    Hardcoding ~/.local/share and /usr/share missed every install method that
+    exports somewhere else: flatpak (~/.local/share/flatpak/exports/share and
+    /var/lib/flatpak/exports/share), /usr/local for anything hand-built, and
+    whatever else a distro adds. A browser installed that way was invisible
+    here -- no row, no mark -- while xdg-settings resolved it perfectly well,
+    so the menu simply disagreed with the system about what was installed.
+    XDG_DATA_DIRS is what every other desktop tool reads. The literals stay as
+    the fallback for a bare environment with no session variables set.
+    """
+    roots = [os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")]
+    raw = os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share"
+    roots += [d for d in raw.split(":") if d]
+    seen, out = set(), []
+    for d in roots:
+        d = os.path.normpath(os.path.expanduser(d))
+        if d not in seen and os.path.isdir(d):
+            seen.add(d)
+            out.append(d)
+    return out
+
+
+APP_DIRS = [os.path.join(root, "applications") for root in data_roots()]
+# Same roots for icons. Largest size first: these get traced into glyph
+# outlines, and more pixels means a cleaner contour.
 ICON_DIRS = [
-    os.path.expanduser("~/.local/share/icons/hicolor/256x256/apps"),
-    "/usr/share/icons/hicolor/256x256/apps",
-    "/usr/share/icons/hicolor/128x128/apps",
-    "/usr/share/icons/hicolor/scalable/apps",
-    "/usr/share/pixmaps",
+    os.path.join(root, sub)
+    for root in data_roots()
+    for sub in (
+        "icons/hicolor/512x512/apps",
+        "icons/hicolor/256x256/apps",
+        "icons/hicolor/128x128/apps",
+        "icons/hicolor/scalable/apps",
+        "pixmaps",
+    )
 ]
 
 GLOBE = "\U000f059f"  # nf-md-web, what Omarchy uses when it has no brand mark
@@ -99,6 +129,23 @@ SHIPPED = {
     # second one beside it.
     "zen-browser.desktop": "zen",
 }
+
+# Desktop ids another tool pins the system default to.
+#
+# keep-default-apps sets the default browser to helium.desktop specifically --
+# Helium's OWN id, which is what a chromium-based browser checks to decide
+# whether it is already the default. Which of the two helium names is the real
+# entry and which is the NoDisplay alias flips per machine: packaged, the entry
+# is helium.desktop; installed as an AppImage, the entry is
+# helium-browser.desktop and helium.desktop is the alias the hook writes.
+#
+# Keying a row on the visible name therefore disagreed with the pinned default
+# on the AppImage machine: the row never read as checked, and choosing it wrote
+# helium-browser.desktop back as the default, which is not the name Helium
+# looks for -- so it re-prompted to be made default forever, with no way to
+# satisfy it from its own UI. Rows key on the pinned id instead, whichever of
+# the aliases happens to be visible here.
+PINNED = {"helium.desktop"}
 
 
 def run(cmd, **kw):
@@ -136,9 +183,27 @@ def is_browser(entry):
     return "webbrowser" in cats
 
 
+def launch_key(entry):
+    """What an entry launches, used to group aliases with their original.
+
+    keep-default-apps writes an alias by copying the source entry and adding
+    NoDisplay, so the two share Exec byte for byte. Field codes (%U, %F) are
+    stripped so a pair differing only in those still groups together.
+    """
+    cmd = (entry.get("TryExec") or entry.get("Exec") or "").strip()
+    return re.sub(r"%[a-zA-Z]", "", cmd).strip() or None
+
+
 def discover():
-    """Installed browsers as (desktop_id, label, icon_name), first dir wins."""
-    found, seen = [], set()
+    """Installed browsers as (desktop_id, label, icon_name), first dir wins.
+
+    NoDisplay entries are no longer discarded outright. They are how duplicate
+    and alias entries mark themselves -- com.google.Chrome.desktop beside
+    google-chrome.desktop -- so they must not become rows of their own, but an
+    alias can still be the name the system default is pinned to (see PINNED),
+    and that name is the one the row has to carry.
+    """
+    found, seen, aliases = [], set(), {}
     for directory in APP_DIRS:
         for path in sorted(glob.glob(os.path.join(directory, "*.desktop"))):
             desktop_id = os.path.basename(path)
@@ -147,18 +212,30 @@ def discover():
             entry = read_entry(path)
             if entry is None or not is_browser(entry):
                 continue
-            # NoDisplay is how duplicate and alias entries mark themselves --
-            # com.google.Chrome.desktop beside google-chrome.desktop, and the
-            # helium-browser.desktop alias keep-default-apps writes. Listing
-            # them would double up rows.
-            if truthy(entry.get("NoDisplay")) or truthy(entry.get("Hidden")):
-                continue
             seen.add(desktop_id)
+            key = launch_key(entry)
+            if truthy(entry.get("NoDisplay")) or truthy(entry.get("Hidden")):
+                # No row of its own, but remember it against what it launches.
+                if key:
+                    aliases.setdefault(key, []).append(desktop_id)
+                continue
             name = entry.get("Name", "") or desktop_id
             # Omarchy's rows read "Brave" and "Zen", not "Brave Browser".
             label = re.sub(r"\s+(Web\s+)?Browser$", "", name.strip()) or name.strip()
-            found.append((desktop_id, label, entry.get("Icon", "").strip()))
-    return found
+            found.append((desktop_id, label, entry.get("Icon", "").strip(), key))
+
+    # Prefer the pinned name when one of this browser's aliases is the id
+    # another tool enforces, so `checked` compares against the same string
+    # xdg-settings reports back and the action writes that id, not its alias.
+    resolved = []
+    for desktop_id, label, icon_name, key in found:
+        if desktop_id not in PINNED and key:
+            for alias in aliases.get(key, []):
+                if alias in PINNED:
+                    desktop_id = alias
+                    break
+        resolved.append((desktop_id, label, icon_name))
+    return resolved
 
 
 def slug_for(desktop_id):
@@ -374,8 +451,16 @@ def rename_family(name_table, family):
     return header + body + storage
 
 
-def build_font(marks, odf):
-    """marks: ordered [(slug, contours)] -> {slug: codepoint}, or {} on failure."""
+def build_font(marks, odf, codepoints):
+    """marks: [(slug, contours)] -> {slug: codepoint}, or {} on failure.
+
+    Codepoints are handed in rather than taken from each mark's position in
+    this list. Position was machine-dependent: with brave, helium and zen
+    installed Helium traced into U+F101, with only Helium installed it traced
+    into U+F100, so the same row rendered a different character on each
+    machine and the tracked file could never agree with itself. The caller
+    assigns from the sorted union of every marked browser instead.
+    """
     if not marks or odf is None or not os.path.exists(BASE_FONT):
         return {}
     staged = None
@@ -391,8 +476,8 @@ def build_font(marks, odf):
             tmp.write(odf.assemble(tables))
             staged = tmp.name
         assigned = {}
-        for index, (slug, contours) in enumerate(marks):
-            codepoint = FIRST_CODEPOINT + index
+        for slug, contours in marks:
+            codepoint = codepoints[slug]
             odf.add_glyph(staged, codepoint, "browser-%s" % slug, contours)
             assigned[slug] = codepoint
         os.chmod(staged, 0o644)
@@ -436,6 +521,13 @@ def row_for(desktop_id, label, slug, icon, icon_font, shipped):
     if icon_font:
         body["iconFont"] = icon_font
     body["label"] = label
+    # Every generated row is present on every machine so the tracked extension
+    # file stays byte-identical (see main), which means a row can name a
+    # browser this machine does not have. The guard hides it here. Absolute
+    # path, not PATH: the shell evaluates this, and inheriting a login PATH is
+    # not something to bet a disappearing menu row on. Shipped rows are not
+    # given one -- they arrive with their own `when` from Omarchy.
+    body["when"] = "$HOME/.local/bin/desktop-entry-present %s" % desktop_id
     # Try Omarchy's own command first so the row upgrades itself (and regains
     # its notification) if Omarchy learns this browser; fall back to
     # xdg-settings, which works for any desktop id. Both streams are discarded
@@ -463,6 +555,25 @@ def strip_jsonc(text):
     return re.sub(r",(\s*[}\]])", r"\1", text)
 
 
+def parse_generated(original):
+    """The rows currently inside the generated block, as {key: body}.
+
+    Rows for browsers this machine does not have are carried through from here
+    rather than regenerated, because they cannot be regenerated: nothing local
+    knows Zen's label or icon once Zen is not installed.
+    """
+    if BEGIN not in original or END not in original:
+        return {}
+    block = original.split(BEGIN, 1)[1].split(END, 1)[0]
+    try:
+        parsed = json.loads(strip_jsonc("{" + block + "}"))
+    except json.JSONDecodeError:
+        # A hand-mangled block is not worth failing over; regenerate from
+        # scratch and let the write-side validation catch a bad result.
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def splice(original, block):
     if BEGIN in original and END in original:
         head, rest = original.split(BEGIN, 1)
@@ -475,9 +586,18 @@ def splice(original, block):
 
 
 def main():
+    # --prune drops rows for browsers not installed here instead of carrying
+    # them. The tracked file then describes this machine only and will differ
+    # on the other one, so it is the deliberate escape hatch for clearing out a
+    # browser nothing runs any more -- not the default.
+    prune = "--prune" in sys.argv[1:]
+
     if not os.path.exists(EXT):
         print("sync-browser-menu: %s missing, nothing to do" % EXT, file=sys.stderr)
         return 0
+
+    original = open(EXT, encoding="utf-8").read()
+    existing = parse_generated(original)
 
     browsers = discover()
     globes = shipped_globe_rows()
@@ -485,7 +605,7 @@ def main():
 
     # A glyph is worth making for a browser Omarchy has no row for at all, and
     # for one whose shipped row is still using the generic globe.
-    wanted, marks = [], []
+    wanted, traced = [], {}
     with tempfile.TemporaryDirectory() as workdir:
         for desktop_id, label, icon_name in browsers:
             slug = slug_for(desktop_id)
@@ -501,8 +621,32 @@ def main():
                     contours = contours_for(icon_path, odf, workdir)
             wanted.append((desktop_id, label, slug, shipped))
             if contours:
-                marks.append((slug, contours))
-        assigned = build_font(marks, odf)
+                traced[slug] = contours
+
+        # Rows for browsers installed on the OTHER machine are kept verbatim.
+        # Each carries a `when` guard, so one that is not installed here simply
+        # does not render -- and the file stays the same bytes on both boxes,
+        # which is the whole point (NEW-MACHINE.md rule 2: never commit a
+        # machine-divergent version of a tracked file).
+        local = {"setup.default.browser.%s" % slug for _, _, slug, _ in wanted}
+        carried = {} if prune else {k: v for k, v in existing.items() if k not in local}
+
+        # Codepoints are assigned over the sorted union of every browser that
+        # HAS a mark anywhere -- traced here, or carried with this font family
+        # already on it. Both machines compute the same union from the same
+        # file, so both land on the same character for the same browser.
+        marked = set(traced)
+        for key, body in carried.items():
+            if body.get("iconFont") == FONT_FAMILY:
+                marked.add(key.rsplit(".", 1)[-1])
+        codepoints = {slug: FIRST_CODEPOINT + index
+                      for index, slug in enumerate(sorted(marked))}
+
+        # Only the marks traced here can be built into this machine's font; a
+        # carried row's glyph is missing locally, and is never seen because its
+        # guard hides the row.
+        assigned = build_font([(slug, traced[slug]) for slug in sorted(traced)],
+                              odf, codepoints)
 
     rows = []
     for desktop_id, label, slug, shipped in wanted:
@@ -512,7 +656,18 @@ def main():
             icon, icon_font = GLOBE, None
         rows.append(row_for(desktop_id, label, slug, icon, icon_font, shipped))
 
-    original = open(EXT, encoding="utf-8").read()
+    for key, body in carried.items():
+        slug = key.rsplit(".", 1)[-1]
+        if body.get("iconFont") == FONT_FAMILY and slug in codepoints:
+            # Its slot moves when a browser is added or removed anywhere.
+            body = dict(body)
+            body["icon"] = chr(codepoints[slug])
+        rows.append((key, body))
+
+    # Sorted, so the block does not reshuffle when the local browser set
+    # changes and produce a diff that is pure reordering.
+    rows.sort(key=lambda row: row[0])
+
     updated = splice(original, render(rows))
     if updated == original:
         # The rows can be identical while the glyphs behind them changed --
@@ -547,6 +702,9 @@ def main():
     described = ", ".join(
         "%s%s" % (label, "" if slug in assigned else " (globe)")
         for _, label, slug, _ in wanted) or "none"
+    if carried:
+        described += "; carried %s" % ", ".join(
+            sorted(k.rsplit(".", 1)[-1] for k in carried))
     print("sync-browser-menu: %d row(s): %s" % (len(rows), described))
     subprocess.run(["omarchy", "menu", "refresh"], check=False,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

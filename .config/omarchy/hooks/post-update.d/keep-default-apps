@@ -66,11 +66,29 @@ browser_entry="helium.desktop"
 # ~/.local/share/applications is deliberately not tracked -- it is already full
 # of generated webapp entries -- so these aliases cost nothing in the repo.
 # NoDisplay keeps them out of launchers, so no duplicate menu entries.
-apps_dir="$HOME/.local/share/applications"
+apps_dir="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+
+# Where a .desktop can actually live. The old list was "$apps_dir" plus
+# /usr/share/applications, which is only true for a pacman install. A browser
+# or terminal installed as a flatpak exports into
+# ~/.local/share/flatpak/exports/share/applications or
+# /var/lib/flatpak/exports/share/applications, and anything hand-built lands in
+# /usr/local/share/applications -- none of which were searched. The effect was
+# silent: resolve_desktop returned 1, so no alias was written and the browser
+# block was skipped entirely, leaving the default wherever it had drifted.
+# XDG_DATA_DIRS is the same set sync-browser-menu scans, so the two agree.
+search_dirs=("$apps_dir")
+IFS=':' read -r -a _xdg_dirs <<<"${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+for _dir in "${_xdg_dirs[@]}"; do
+  [[ -n $_dir && -d $_dir/applications ]] || continue
+  [[ $_dir/applications == "$apps_dir" ]] && continue
+  search_dirs+=("$_dir/applications")
+done
+unset _xdg_dirs _dir
 
 resolve_desktop() {
   local name=$1 dir
-  for dir in "$apps_dir" /usr/share/applications; do
+  for dir in "${search_dirs[@]}"; do
     [[ -f $dir/$name ]] && { printf '%s\n' "$dir/$name"; return 0; }
   done
   return 1
@@ -117,7 +135,7 @@ command -v update-desktop-database >/dev/null 2>&1 && \
 # --- Terminal ---------------------------------------------------------------
 # Only meaningful if ghostty is actually installed; otherwise leave whatever
 # xdg-terminal-exec resolves to rather than pointing at a missing entry.
-if [[ -f /usr/share/applications/$terminal_entry ]]; then
+if resolve_desktop "$terminal_entry" >/dev/null; then
   if [[ ! -f $terminal_list ]] || ! grep -qxF "$terminal_entry" "$terminal_list"; then
     cat >"$terminal_list" <<-EOF
 	# Terminal emulator preference order for xdg-terminal-exec

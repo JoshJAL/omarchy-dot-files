@@ -1,0 +1,30 @@
+#!/bin/bash
+# Exit 0 if a .desktop id resolves anywhere XDG says applications live.
+#
+# The menu's generated browser rows are kept identical on every machine so the
+# tracked extension file does not go dirty on whichever box has a different set
+# of browsers installed (see NEW-MACHINE.md rule 2). That means a row exists for
+# a browser this machine may not have, and each row carries this as its `when`
+# guard so it is simply not rendered here.
+#
+# `omarchy-cmd-present` is the obvious guard and is wrong for this: it tests
+# PATH, and a browser installed as an AppImage or a flatpak has no command on
+# PATH at all -- Helium here is ~/Applications/helium-0.8.5.1-x86_64.AppImage,
+# so `omarchy-cmd-present helium` is false while the browser is installed,
+# default, and running. What the row actually depends on is the desktop entry
+# the row's action names, so test exactly that.
+set -u
+
+[[ $# -eq 1 && -n $1 ]] || { echo "usage: desktop-entry-present <name.desktop>" >&2; exit 2; }
+
+name=$1
+dirs=("${XDG_DATA_HOME:-$HOME/.local/share}/applications")
+IFS=':' read -r -a roots <<<"${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+for root in "${roots[@]}"; do
+  [[ -n $root ]] && dirs+=("$root/applications")
+done
+
+for dir in "${dirs[@]}"; do
+  [[ -f $dir/$name ]] && exit 0
+done
+exit 1
