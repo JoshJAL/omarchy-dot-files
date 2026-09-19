@@ -1,10 +1,11 @@
 [tools]
 "aqua:supabase/cli" = "latest"
+bun = "latest"
 claude = "latest"
 codex = "latest"
 gh = "latest"
 glab = "latest"
-node = "26"
+node = "latest"
 "npm:mex-agent" = "latest"
 "npm:vercel" = "latest"
 opencode = "latest"

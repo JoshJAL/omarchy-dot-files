@@ -34,11 +34,6 @@ if [ -z "$SSH_AUTH_SOCK" ] && [ -S "${XDG_RUNTIME_DIR:-/run/user/$UID}/ssh-agent
   export SSH_AUTH_SOCK="${XDG_RUNTIME_DIR:-/run/user/$UID}/ssh-agent.socket"
 fi
 
-export BUN_INSTALL="$HOME/.bun"
-# Guarded: .bash_profile sources this file, so an unguarded prepend landed in
-# PATH twice for login shells.
-case ":$PATH:" in *":$BUN_INSTALL/bin:"*) ;; *) export PATH="$BUN_INSTALL/bin:$PATH" ;; esac
-
 SCREENSAVERS=(~/.config/omarchy/branding/screensavers/*.txt)
 cp "${SCREENSAVERS[RANDOM % ${#SCREENSAVERS[@]}]}" ~/.config/omarchy/branding/about.txt
 fastfetch
