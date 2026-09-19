@@ -58,8 +58,8 @@ out which tool wrote it and why before doing anything else.
 
 Two kinds turn up in practice, and they are not the same problem:
 
-- **Re-serialization.** A tool rewrote the file with identical meaning — a `—` escape
-  emitted as a literal `—`. Harmless; revert it.
+- **Re-serialization.** A tool rewrote the file with identical meaning — a
+  `\u2014` escape rewritten as the literal character it already meant. Harmless; revert it.
 - **Encoded machine state.** The content genuinely differs because this machine differs. That is
   the one that matters. See *Failure modes already seen* below.
 
@@ -79,7 +79,7 @@ Then apply the invariant for each location:
 | Location | Invariant | Check |
 |---|---|---|
 | `.config/systemd/user/*.{path,service,timer}` | enabled **and** active | `systemctl --user is-enabled X; systemctl --user is-active X; systemctl --user list-units --failed` |
-| `.local/bin/*` | executable, and resolves on `PATH` | `test -x`, then `command -v <name>` |
+| `.local/bin/*` | executable, resolves on `PATH`, and the external commands it shells out to are installed | `test -x`, `command -v <name>`, then `command -v` each tool the script calls |
 | `.config/omarchy/hooks/post-update.d/*` | has been run once since the pull | run it — they are idempotent by design |
 | `.config/hypr/*.lua` | config parses; every binding is registered | `hyprctl reload && hyprctl configerrors` (must be empty), then `hyprctl binds` |
 | `.config/omarchy/plugins/*` | declared in `shell.json`, and the shell restarted since the pull | `grep <id> ~/.config/omarchy/shell.json`; `pgrep -af quickshell` |
@@ -96,6 +96,11 @@ Notes that have cost time before:
 - **JSONC is not JSON.** Trailing commas are legal in the menu extension. A plain `json.loads`
   reports a syntax error on a perfectly valid file; strip trailing commas first or you will
   "fix" something that was never broken.
+- **A script's external dependencies are not tracked by git.** Git carries the script; it does
+  not carry the binaries the script calls, and those are a separate install on every machine. A
+  well-written one here degrades rather than crashing when a dependency is gone, which means the
+  symptom is quieter than a missing script would be. Grep a script for the commands it runs and
+  confirm each resolves.
 - **A mimeapps handler that does not resolve does not error.** It falls through silently to
   whatever else claims the scheme. Resolving each name is the only way to see it.
 
@@ -161,6 +166,14 @@ installed as a flatpak or into `/usr/local` exports somewhere else entirely, so 
 to both while `xdg-settings` resolved it fine — the menu simply disagreed with the system. Both
 now read `XDG_DATA_DIRS`. **When adding tooling that looks for a `.desktop`, use the XDG dirs;
 the install method differs per machine and per app.**
+
+**A missing dependency that produced a worse-looking icon rather than an error.**
+`sync-browser-menu` traces a browser's icon into a glyph through `magick`, then `potrace`.
+`potrace` was swept up in a package consolidation, and tracing returns nothing when it is absent
+by design -- a browser with no mark is meant to fall back to the generic globe rather than take
+the menu down. So the only symptom was Helium's row quietly rendering a globe, which looks far
+more like the icon-resolution code being wrong than like an uninstalled package. **Before
+debugging why a mark is missing, check `potrace` and `magick` are installed.**
 
 **A guard that tested the wrong thing.** `omarchy-cmd-present` tests `PATH`, and a browser
 installed as an AppImage has no command on `PATH` at all — so it reported "not installed" for a
