@@ -4,6 +4,13 @@ Version-controlled configuration for my [Omarchy](https://omarchy.org/) (Arch + 
 The goal: never lose custom settings — keybindings, idle/lock timings, themes, bar layout —
 across `omarchy update` or a full reinstall.
 
+Two companion docs, both written for an agent to execute:
+
+- **[`FOR_AGENT.md`](FOR_AGENT.md)** — run after every `dotfiles pull`, to confirm what arrived
+  is actually in effect on this machine. Point an agent at it; nothing loads it automatically.
+- **[`NEW-MACHINE.md`](NEW-MACHINE.md)** — once per machine, for hardware this repo has never
+  run on.
+
 ## How it works
 
 This is a **bare git repository** with its work-tree set to `$HOME`. Config files are tracked

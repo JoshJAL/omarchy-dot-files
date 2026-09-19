@@ -5,6 +5,10 @@
 `README.md` explains what this repo *is*. This file is the procedure for making it fit a machine
 it has never run on. It is written for an agent to execute.
 
+**For a routine pull onto a machine already set up, use [`FOR_AGENT.md`](FOR_AGENT.md) instead.**
+This file is the once-per-machine path; that one is the every-time path, and it hands back here
+if it finds hardware the branches below do not cover.
+
 The repo is shared by every machine on one branch (`main`). There is no per-machine branch and
 there must not be one — divergent branches drift and conflict on every pull. Machines differ by
 **detecting their own hardware at config-read time**, not by holding different files.
