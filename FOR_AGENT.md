@@ -6,6 +6,19 @@ what arrived in the pull is actually *in effect* on this machine, not merely pre
 `README.md` explains what this repo is. `NEW-MACHINE.md` is the once-per-machine setup
 procedure. This file is the routine one: run it every time files land.
 
+**Claude Code and Codex config is not in this repo.** It lives in the private `~/.agentfiles`
+repo, and syncing it has its own procedure with its own hazards — notably that a plain
+`checkout` there destroys machine-local settings. If that is the task, fetch and read
+`~/FOR_AGENT-AGENTFILES.md` instead of this file:
+
+```bash
+git --git-dir=$HOME/.agentfiles --work-tree=$HOME fetch origin main
+git --git-dir=$HOME/.agentfiles --work-tree=$HOME show FETCH_HEAD:FOR_AGENT-AGENTFILES.md
+```
+
+No `~/.agentfiles` directory means the bare repo was never cloned on this machine; that runbook's
+Step 0 covers it. The `agentfiles` alias in `~/.bashrc` exists either way and proves nothing.
+
 ---
 
 ## Why this file is not called CLAUDE.md or AGENTS.md
