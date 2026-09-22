@@ -1,0 +1,24 @@
+#!/bin/bash
+
+# Report themes the tracked list and this machine disagree about.
+#
+# themes-installed.txt is tracked; ~/.config/omarchy/themes/ is not. A theme
+# installed here never reaches the other machine, and a theme the other machine
+# added never arrives here -- and neither one errors, so the drift is only ever
+# found by going looking for it.
+#
+# An update is when to look: it is the moment you would otherwise assume the
+# two machines match. Report only -- reconciling asks questions, and a hook has
+# nobody to ask.
+#
+# Silent when the two agree.
+
+THEME_SYNC="$HOME/.local/bin/theme-sync"
+[[ -x $THEME_SYNC ]] || exit 0
+
+out=$("$THEME_SYNC" --quiet 2>/dev/null)
+[[ -n $out ]] || exit 0
+
+echo -e "\e[32m\nTheme drift\e[0m"
+echo "$out"
+exit 0

@@ -1,0 +1,248 @@
+#!/usr/bin/env bash
+#
+# theme-sync — reconcile the tracked theme list against what is installed here.
+#
+# Usage:
+#   theme-sync           reconcile interactively
+#   theme-sync --quiet   print nothing unless the two disagree (used by the hook)
+#
+# WHY THIS EXISTS
+#
+# ~/.config/omarchy/themes-installed.txt is tracked. ~/.config/omarchy/themes/
+# is not -- each theme is its own upstream git repo, so the repo records the
+# URLs and the directories are rebuilt per machine. That split is deliberate,
+# and it means the two halves drift silently:
+#
+#   a theme installed here        never reaches the other machine, because
+#                                 nothing adds it to the tracked list
+#   a theme added to the list     never arrives here, because a pull writes
+#   on the other machine          the list and nothing clones from it
+#
+# Neither shows up as an error. The list is a text file that is always valid
+# whatever it says, and a theme you never switch to is indistinguishable from
+# one that is not installed. `aetheria` and `bauhaus` sat in the tracked list
+# with no directory behind them for long enough that nobody remembers which
+# machine installed them.
+#
+# So this walks both directions and reconciles them one at a time.
+#
+# WHAT IT WILL NOT DO
+#
+# Untracking a theme edits a file the other machine pulls, so this never
+# commits -- it prints what changed and leaves the commit to you. And
+# untracking is not uninstalling: dropping a line stops the other machine
+# being asked to install it, and leaves your copy alone.
+
+set -uo pipefail
+
+# Overridable so the tests can point the whole thing at a temp directory.
+THEMES_DIR="${THEMES_DIR:-$HOME/.config/omarchy/themes}"
+THEMES_LIST="${THEMES_LIST:-$HOME/.config/omarchy/themes-installed.txt}"
+THEME_STATE="${THEME_STATE:-$HOME/.local/state/omarchy/current/theme.name}"
+
+QUIET=0
+
+# ---------------------------------------------------------------------------
+# Derive the directory name a URL installs to.
+#
+# This is omarchy-theme-install:32 reproduced exactly, scp-style handling and
+# all. It has to be: the name it computes is where the clone lands, so any
+# divergence here reports drift that does not exist, or misses drift that does.
+# If that line upstream ever changes, this is the line that follows it.
+# ---------------------------------------------------------------------------
+derive_name() {
+  local url=$1 path=$1
+  # git reads a URL as scp-style when a colon appears before any slash, so
+  # `git@host:omarchy-blue-theme.git` is a repo in that user's home and the
+  # prefix has to come off before basename sees it.
+  [[ $path != *"://"* && $path == *:* && ${path%%:*} != */* ]] && path="${path#*:}"
+  basename -- "$path" .git | sed -E 's/^omarchy-//; s/-theme$//' | tr '[:upper:]' '[:lower:]'
+}
+
+# The name characters omarchy-theme-install will accept. A line naming anything
+# else would be refused at install time, so flag it here rather than at 10pm.
+valid_name() { (LC_ALL=C; [[ $1 =~ ^[a-z0-9_][a-z0-9._+-]*$ ]]); }
+
+remote_of() { git -C "$THEMES_DIR/$1" remote get-url origin 2>/dev/null; }
+
+current_theme() { [[ -f $THEME_STATE ]] && cat "$THEME_STATE"; }
+
+# ---------------------------------------------------------------------------
+# Read both sides into: tracked[name]=url, order[], installed[name]=1
+# ---------------------------------------------------------------------------
+declare -A tracked=() installed=()
+declare -a order=() mismatches=() badnames=()
+
+read_list() {
+  [[ -f $THEMES_LIST ]] || return 0
+  local line name url derived
+  while IFS= read -r line || [[ -n $line ]]; do
+    line="${line%%$'\r'}"
+    [[ -z ${line//[[:space:]]/} || ${line#"${line%%[![:space:]]*}"} == \#* ]] && continue
+    name=$(awk '{print $1}' <<<"$line")
+    url=$(awk '{print $2}' <<<"$line")
+    if [[ -z $url ]]; then
+      badnames+=("$name (no url)")
+      continue
+    fi
+    derived=$(derive_name "$url")
+    # Column 1 is what a human reads; the derived name is where the theme
+    # actually lands. When they disagree one of them is lying, and guessing
+    # which would either install a duplicate or hide a real gap.
+    [[ $name != "$derived" ]] && mismatches+=("list says '$name', url gives '$derived'")
+    valid_name "$derived" || { badnames+=("$derived (unusable name)"); continue; }
+    tracked["$derived"]="$url"
+    order+=("$derived")
+  done <"$THEMES_LIST"
+}
+
+read_installed() {
+  [[ -d $THEMES_DIR ]] || return 0
+  local d name
+  for d in "$THEMES_DIR"/*/; do
+    [[ -d $d ]] || continue
+    name=$(basename "$d")
+    installed["$name"]=1
+  done
+}
+
+# ---------------------------------------------------------------------------
+# Mutations
+# ---------------------------------------------------------------------------
+
+# Append a line, padded to match the column the file already uses.
+track_theme() {
+  local name=$1 url=$2 pad
+  pad=$(printf '%-18s' "$name")
+  [[ -f $THEMES_LIST ]] || : >"$THEMES_LIST"
+  # Keep the file ending in exactly one newline whatever state it arrived in.
+  [[ -s $THEMES_LIST && $(tail -c1 "$THEMES_LIST"; echo x) != $'\nx' ]] && echo >>"$THEMES_LIST"
+  printf '%s %s\n' "$pad" "$url" >>"$THEMES_LIST"
+  echo "  tracked $name"
+}
+
+untrack_theme() {
+  local name=$1 tmp
+  tmp=$(mktemp)
+  # Match on the derived name of each line's URL, not on column 1 -- a line
+  # whose name column is wrong still has to be removable by its real name.
+  local line lname lurl
+  while IFS= read -r line || [[ -n $line ]]; do
+    lname=$(awk '{print $1}' <<<"$line")
+    lurl=$(awk '{print $2}' <<<"$line")
+    if [[ -n $lurl ]] && [[ $(derive_name "$lurl") == "$name" ]]; then continue; fi
+    printf '%s\n' "$line"
+  done <"$THEMES_LIST" >"$tmp"
+  mv "$tmp" "$THEMES_LIST"
+  echo "  untracked $name"
+}
+
+# ---------------------------------------------------------------------------
+main() {
+  local arg
+  for arg in "$@"; do
+    case $arg in
+      -q|--quiet) QUIET=1 ;;
+      -h|--help)  sed -n '2,8p' "$0" | sed 's/^# \?//'; exit 0 ;;
+      *) echo "unknown flag: $arg" >&2; exit 2 ;;
+    esac
+  done
+
+  read_list
+  read_installed
+
+  local name
+  local -a missing=() untracked=()
+  for name in "${order[@]}"; do
+    [[ -n ${installed[$name]:-} ]] || missing+=("$name")
+  done
+  for name in "${!installed[@]}"; do
+    [[ -n ${tracked[$name]:-} ]] || untracked+=("$name")
+  done
+  # Associative key order is a hash order; sort so runs are comparable. Guarded
+  # because `printf '%s\n'` with no arguments still prints one empty line, which
+  # turns an empty array into a one-element array holding "" -- reported as an
+  # untracked theme with no name.
+  if (( ${#untracked[@]} )); then
+    mapfile -t untracked < <(printf '%s\n' "${untracked[@]}" | sort)
+  fi
+
+  # --- report ---------------------------------------------------------------
+  if (( ${#missing[@]} == 0 && ${#untracked[@]} == 0 && ${#mismatches[@]} == 0 && ${#badnames[@]} == 0 )); then
+    (( QUIET )) || echo "theme-sync: in sync / ${#order[@]} tracked, ${#installed[@]} installed"
+    exit 0
+  fi
+
+  local label
+  if (( ${#missing[@]} )); then
+    echo "theme-sync: tracked but not installed here: $(IFS=', '; echo "${missing[*]}")"
+  fi
+  if (( ${#untracked[@]} )); then
+    local -a labelled=()
+    for name in "${untracked[@]}"; do
+      [[ -n $(remote_of "$name") ]] && labelled+=("$name") || labelled+=("$name (no remote)")
+    done
+    echo "theme-sync: installed but not tracked: $(IFS=', '; echo "${labelled[*]}")"
+  fi
+  for label in ${mismatches+"${mismatches[@]}"}; do
+    echo "theme-sync: name mismatch: $label"
+  done
+  for label in ${badnames+"${badnames[@]}"}; do
+    echo "theme-sync: unusable list entry: $label"
+  done
+
+  if (( QUIET )); then
+    echo "  run \`theme-sync\` to reconcile"
+    exit 0
+  fi
+
+  # --- reconcile ------------------------------------------------------------
+  local before after changed=0 installed_any=0 answer
+  before=$(current_theme)
+
+  for name in ${missing+"${missing[@]}"}; do
+    echo
+    echo "$name    tracked, not installed here"
+    read -r -p "  [i]nstall  [u]ntrack  [s]kip > " answer </dev/tty 2>/dev/null || read -r answer
+    case ${answer,,} in
+      i) omarchy theme install "${tracked[$name]}" && installed_any=1 ;;
+      u) untrack_theme "$name"; changed=1 ;;
+      *) echo "  skipped" ;;
+    esac
+  done
+
+  for name in ${untracked+"${untracked[@]}"}; do
+    local url
+    url=$(remote_of "$name")
+    echo
+    if [[ -z $url ]]; then
+      echo "$name    installed, not tracked -- no remote, so it cannot be tracked"
+      continue
+    fi
+    echo "$name    installed, not tracked"
+    read -r -p "  [t]rack  [l]eave > " answer </dev/tty 2>/dev/null || read -r answer
+    case ${answer,,} in
+      t) track_theme "$name" "$url"; changed=1 ;;
+      *) echo "  left alone" ;;
+    esac
+  done
+
+  # omarchy-theme-install ends with omarchy-theme-set, so installing anything
+  # switches you to it. Reconciling five missing themes would otherwise leave
+  # you on whichever one sorted last.
+  if (( installed_any )) && [[ -n $before ]]; then
+    after=$(current_theme)
+    if [[ $after != "$before" ]]; then
+      omarchy theme set "$before" >/dev/null 2>&1 && echo && echo "  restored theme: $before"
+    fi
+  fi
+
+  if (( changed )); then
+    echo
+    echo "  $THEMES_LIST is tracked -- review and commit it, the other machine pulls this"
+  fi
+  exit 0
+}
+
+# Sourced by the tests to reach derive_name directly; run normally otherwise.
+[[ ${BASH_SOURCE[0]} == "${0}" ]] && main "$@"
