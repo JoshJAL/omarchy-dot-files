@@ -92,6 +92,7 @@
 !/.local/bin/omarchy-launch-screensaver
 !/.local/bin/repo-lag
 !/.local/bin/sync-browser-menu
+!/.local/bin/theme-sync
 !/.local/bin/wait-for-pacman-lock
 !/.local/bin/zed-launch
 !/.local/share/
