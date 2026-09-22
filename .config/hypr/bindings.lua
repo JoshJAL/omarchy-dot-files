@@ -92,3 +92,20 @@ o.bind("SUPER + ALT + W", "Close all windows on workspace", os.getenv("HOME") ..
 --   SUPER+L -> hyprlock. hyprlock is gone in Quattro and Omarchy 4 already
 --   binds omarchy-system-lock to SUPER + CTRL + L, so SUPER+L goes back to
 --   its default, "Toggle workspace layout".
+
+-- Screens off without locking, on SUPER+SHIFT+L. Omarchy gives you Lock
+-- (SUPER+CTRL+L, blanks *and* takes a password to get back) and Suspend, but
+-- nothing for "just turn the monitors off, I'm still here". This is that:
+-- DPMS off, session untouched, any key or mouse move brings them back, because
+-- Omarchy sets key_press_enables_dpms and mouse_move_enables_dpms in
+-- default/hypr/input.lua.
+--
+-- SUPER+L is "Toggle workspace layout" and SUPER+CTRL+L is the lock, so SHIFT
+-- is the free slot in the L family and reads as the softer sibling of the lock
+-- next door.
+--
+-- The 1s delay is load-bearing: letting go of the keys is itself an input
+-- event, so blanking immediately would wake the screens right back up. The
+-- sleep puts the blank after the key release. Same one-liner is on the
+-- "Screens Off" row in ~/.config/omarchy/extensions/omarchy-menu.jsonc.
+o.bind("SUPER + SHIFT + L", "Screens off (no lock)", "sleep 1; omarchy-brightness-display off")
