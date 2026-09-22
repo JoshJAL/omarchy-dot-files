@@ -10,7 +10,7 @@
           "id": "omarchy.clock",
           "format": "ddd d MMM h:mm AP",
           "formatAlt": "d MMMM 'W'ww yyyy",
-          "verticalFormat": "h\n\u2014\nmm\nAP"
+          "verticalFormat": "h\n—\nmm\nAP"
         },
         {
           "id": "omarchy.keyboard-layout"
@@ -41,6 +41,9 @@
       "right": [
         {
           "id": "omarchy.tray"
+        },
+        {
+          "id": "omarchy.tailscale"
         },
         {
           "id": "omarchy.agents"
