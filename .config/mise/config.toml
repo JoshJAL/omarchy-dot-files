@@ -9,6 +9,11 @@ node = "latest"
 "npm:mex-agent" = "latest"
 "npm:vercel" = "latest"
 opencode = "latest"
+pnpm = "latest"
+
+[env]
+# Use sharp's bundled libvips instead of building against the pacman libvips
+SHARP_IGNORE_GLOBAL_LIBVIPS = "1"
 
 [settings]
 minimum_release_age = "0"
