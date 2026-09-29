@@ -149,3 +149,10 @@ id_ed25519*
 *.tgz
 *.zip
 *.log
+
+# DefenseWerx timesheet launcher
+!/.config/systemd/
+/.config/systemd/*
+!/.config/systemd/user/
+/.config/systemd/user/*
+!/.config/systemd/user/open-defensewerx.*
