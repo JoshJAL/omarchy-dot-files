@@ -109,3 +109,5 @@ o.bind("SUPER + ALT + W", "Close all windows on workspace", os.getenv("HOME") ..
 -- sleep puts the blank after the key release. Same one-liner is on the
 -- "Screens Off" row in ~/.config/omarchy/extensions/omarchy-menu.jsonc.
 o.bind("SUPER + SHIFT + L", "Screens off (no lock)", "sleep 1; omarchy-brightness-display off")
+
+hl.bind("CTRL + SHIFT + 2", hl.dsp.global("com.t3tools.T3Code:capture-window"))

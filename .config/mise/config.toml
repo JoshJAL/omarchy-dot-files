@@ -7,9 +7,11 @@ copilot = "latest"
 cursor-agent = { version = "latest", bin_path = "bin", strip_components = 0, url = 'https://downloads.cursor.com/lab/{{ version }}/{{ os(macos="darwin") }}/{{ arch(x64="x64", arm64="arm64") }}/agent-cli-package.tar.gz', version_list_url = "https://cursor.com/install", version_regex = 'downloads\.cursor\.com/lab/([0-9]{4}\.[0-9]{2}\.[0-9]{2}-[0-9a-f]+)/', postinstall = 'mkdir -p "$MISE_TOOL_INSTALL_PATH/bin" && ln -sfn ../dist-package/cursor-agent "$MISE_TOOL_INSTALL_PATH/bin/cursor-agent"' }
 gemini = { version = "latest", allow_builds = ["@github/keytar", "node-pty"] }
 gh = "latest"
+"github:microsoftgraph/msgraph-cli" = { version = "latest", exe = "mgc" }
 glab = "latest"
 node = "latest"
 "npm:mex-agent" = "latest"
+"npm:playwright" = "latest"
 "npm:vercel" = "latest"
 opencode = "latest"
 pnpm = "latest"
