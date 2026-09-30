@@ -24,10 +24,10 @@ local function has_internal_panel()
 end
 
 if has_internal_panel() then
-  -- Work laptop. Ported from monitors.conf (nwg-displays, 2026-08-21).
-  hl.monitor({ output = "eDP-1",    mode = "1920x1200@165.0", position = "2351x1440", scale = 1.0 })
-  hl.monitor({ output = "HDMI-A-1", mode = "3440x1440@59.97", position = "0x0",       scale = 1.0 })
-  hl.monitor({ output = "DVI-I-1",  mode = "1920x1080@60.0",  position = "3440x360",  scale = 1.0 })
+  -- Work laptop. Positions from nwg-displays, 2026-09-28.
+  hl.monitor({ output = "eDP-1",    mode = "1920x1200@165.0", position = "2585x1506", scale = 1.0, vrr = 0 })
+  hl.monitor({ output = "HDMI-A-1", mode = "3440x1440@59.97", position = "0x66",      scale = 1.0, vrr = 0 })
+  hl.monitor({ output = "DVI-I-1",  mode = "1920x1080@60.0",  position = "3440x426",  scale = 1.0, vrr = 0 })
 else
   -- Desktop (RTX 5080, both outputs on the NVIDIA card). LG ultrawide on top,
   -- Acer centered underneath: (3440 - 2560) / 2 = 440.
