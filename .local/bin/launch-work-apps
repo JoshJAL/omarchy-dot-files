@@ -1,0 +1,8 @@
+#!/bin/bash
+# Launch Outlook, Teams, and Slack. Skips any app that already has a window.
+running() { hyprctl clients -j | jq -e --arg c "$1" 'any(.[]; .class | test($c; "i"))' >/dev/null; }
+
+running '^slack$' || setsid uwsm-app -- slack >/dev/null 2>&1 &
+running 'outlook' || setsid omarchy-launch-webapp "https://outlook.office.com/mail/" >/dev/null 2>&1 &
+running 'teams' || setsid omarchy-launch-webapp "https://teams.microsoft.com/v2/" >/dev/null 2>&1 &
+wait
