@@ -111,3 +111,8 @@ o.bind("SUPER + ALT + W", "Close all windows on workspace", os.getenv("HOME") ..
 o.bind("SUPER + SHIFT + L", "Screens off (no lock)", "sleep 1; omarchy-brightness-display off")
 
 hl.bind("CTRL + SHIFT + 2", hl.dsp.global("com.t3tools.T3Code:capture-window"))
+
+-- Launch the work trio (Outlook, Teams, Slack) in one go. Skips apps that are
+-- already open. SUPER+SHIFT+ALT+W is free; W for "work". Absolute path because
+-- the exec dispatcher gets no login shell, so ~/.local/bin is not on PATH.
+o.bind("SUPER + SHIFT + ALT + W", "Launch work apps", os.getenv("HOME") .. "/.local/bin/launch-work-apps")
