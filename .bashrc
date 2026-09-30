@@ -14,6 +14,9 @@ else
 fi
 source "$OMARCHY_PATH/default/bash/rc"
 
+# Use vi-style command-line editing in interactive Bash sessions.
+set -o vi
+
 # Add your own exports, aliases, and functions here.
 #
 # Make an alias for invoking commands you use constantly
