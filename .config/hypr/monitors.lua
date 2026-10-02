@@ -24,10 +24,17 @@ local function has_internal_panel()
 end
 
 if has_internal_panel() then
-  -- Work laptop. Positions from nwg-displays, 2026-09-28.
-  hl.monitor({ output = "eDP-1",    mode = "1920x1200@165.0", position = "2585x1506", scale = 1.0, vrr = 0 })
-  hl.monitor({ output = "HDMI-A-1", mode = "3440x1440@59.97", position = "0x66",      scale = 1.0, vrr = 0 })
-  hl.monitor({ output = "DVI-I-1",  mode = "1920x1080@60.0",  position = "3440x426",  scale = 1.0, vrr = 0 })
+  -- Work laptop, 2026-10-01. DVI-I-1 (DisplayLink) is rotated to portrait
+  -- (transform = 3), so it occupies 1080x1920 in layout space. Origin is 0x0.
+  --
+  --   DVI-I-1   top-left (3440, 0)    1080x1920, right of the ultrawide
+  --   HDMI-A-1  top-left (0, 480)     3440x1440; y = 1920 - 1440 puts its bottom
+  --                                   edge level with the portrait panel's
+  --   eDP-1     top-left (2480, 1920) 1920x1200; flush under both bottom edges and
+  --                                   centred on the x = 3440 seam (3440 - 1920/2)
+  hl.monitor({ output = "DVI-I-1",  mode = "1920x1080@60.0",  position = "3440x0",    scale = 1.0, vrr = 0, transform = 3 })
+  hl.monitor({ output = "HDMI-A-1", mode = "3440x1440@59.97", position = "0x480",     scale = 1.0, vrr = 0 })
+  hl.monitor({ output = "eDP-1",    mode = "1920x1200@165.0", position = "2480x1920", scale = 1.0, vrr = 0 })
 else
   -- Desktop (RTX 5080, both outputs on the NVIDIA card). LG ultrawide on top,
   -- Acer centered underneath: (3440 - 2560) / 2 = 440.
