@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# CPU usage over 1s from /proc/stat plus NVIDIA GPU usage, as Waybar-style JSON
+read -r _ u1 n1 s1 i1 w1 q1 sq1 _ < /proc/stat
+sleep 1
+read -r _ u2 n2 s2 i2 w2 q2 sq2 _ < /proc/stat
+idle=$(( (i2 + w2) - (i1 + w1) ))
+total=$(( (u2+n2+s2+i2+w2+q2+sq2) - (u1+n1+s1+i1+w1+q1+sq1) ))
+pct=$(( total > 0 ? 100 * (total - idle) / total : 0 ))
+gpu=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
+if [[ -n $gpu ]]; then
+  printf '{"text":"󰍛 %s%% 󰢮 %s%%","tooltip":"CPU %s%% / GPU %s%% - click for btop"}\n' "$pct" "$gpu" "$pct" "$gpu"
+else
+  printf '{"text":"󰍛 %s%%","tooltip":"CPU %s%% - click for btop"}\n' "$pct" "$pct"
+fi

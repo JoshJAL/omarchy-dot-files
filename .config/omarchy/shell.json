@@ -58,6 +58,13 @@
           "id": "omarchy.audio"
         },
         {
+          "id": "cpu",
+          "type": "command",
+          "exec": "~/.config/omarchy/bar/scripts/cpu-status",
+          "interval": 5,
+          "onClick": "omarchy-launch-or-focus-tui btop"
+        },
+        {
           "id": "omarchy.monitor"
         },
         {
