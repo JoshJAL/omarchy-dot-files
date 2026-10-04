@@ -1,7 +1,0 @@
-[Unit]
-Description=Open DefenseWerx timesheets (Unanet + Deltek) in default browser
-
-[Service]
-Type=oneshot
-ExecStart=xdg-open https://defensewerx.unanet.biz/defensewerx/action/home
-ExecStart=xdg-open https://cp-defensewerx.prd.mydeltekgcc.com/CPWeb/masterPage.htm#A0
