@@ -1,6 +1,11 @@
 # If not running interactively, don't do anything (leave this at the top of this file)
 [[ $- != *i* ]] && return
 
+# ble.sh: fish-style autosuggestions + syntax highlighting (the bash stand-in for
+# zsh-autosuggestions / zsh-syntax-highlighting on the Mac). Must load before the
+# Omarchy rc and attach at the very end. Guarded so machines without it are fine.
+[[ -r ~/.local/share/blesh/ble.sh ]] && source ~/.local/share/blesh/ble.sh --noattach
+
 # All the default Omarchy aliases and functions
 # (don't mess with these directly, just overwrite them here!)
 # /etc/omarchy.conf is written by omarchy-dev-link. When absent, force the
@@ -57,3 +62,6 @@ alias agentfiles-track='git --git-dir=$HOME/.agentfiles --work-tree=$HOME add -f
 # ~/.config/mise/config.toml already sets it to 0; this env var also beats any
 # project mise.toml or /etc/mise/conf.d drop-in that tries to re-impose it.
 export MISE_MINIMUM_RELEASE_AGE=0
+
+# ble.sh: attach last (see top of file)
+[[ ${BLE_VERSION-} ]] && ble-attach
