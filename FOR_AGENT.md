@@ -131,6 +131,32 @@ Step 5 is the authority; this is the checklist form:
    header comment.
 3. **`.desktop` aliases** — written by `hooks/post-update.d/keep-default-apps`, not by git. Until
    that hook runs, a tracked `mimeapps.list` can name a handler this machine cannot resolve.
+4. **ble.sh** (fish-style autosuggestions and syntax highlighting in bash) — `.bashrc` loads it
+   only if `~/.local/share/blesh/ble.sh` exists, so a machine without it works but silently has
+   no suggestions. Check, and install if missing:
+
+   ```bash
+   test -r ~/.local/share/blesh/ble.sh && echo installed || echo MISSING
+   ```
+
+   If missing, build upstream into the user prefix, from a fresh empty directory (no root, not in
+   pacman):
+
+   ```bash
+   d=$(mktemp -d) && git clone --recursive --depth 1 --shallow-submodules \
+     https://github.com/akinomyoga/ble.sh "$d/ble.sh" && make -C "$d/ble.sh" install PREFIX="$HOME/.local"
+   ```
+
+   Verify in a new shell: `bash -ic 'echo $BLE_VERSION'` prints a version. Update later with
+   `ble-update`. **Do not use the AUR `blesh` / `blesh-git` packages** — both are about 2.5 years
+   stale.
+
+   It only behaves if Ghostty's own bash integration is off. `.config/ghostty/config` sets
+   `shell-integration = none`; with integration on, the first prompt of every new window is drawn
+   twice. A running Ghostty reads its config at launch, so after the pull press `Ctrl+A` then `r`
+   (or quit and reopen it) before judging. Cost of that setting: no `ssh-env`, so a remote host
+   without an `xterm-ghostty` terminfo entry reports `unknown terminal type`; fix it with
+   `alias ssh='TERM=xterm-256color ssh'` in `.bashrc`, not by turning integration back on.
 
 ---
 
