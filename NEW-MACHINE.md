@@ -112,7 +112,7 @@ local M = {}
 M.id       = id
 M.is       = function(name) return id == name end
 M.LAPTOP   = "System76 Oryx Pro"
-M.DESKTOP  = "<sys_vendor> <product_name>"   -- fill in from Step 1 on the desktop
+M.DESKTOP  = "Gigabyte Technology Co., Ltd. X670 AORUS ELITE AX"
 return M
 ```
 
@@ -207,7 +207,7 @@ machine on its next pull.
 
 | | Work laptop | Desktop |
 |---|---|---|
-| DMI | `System76` / `Oryx Pro` | fill in from Step 1 |
+| DMI | `System76` / `Oryx Pro` | `Gigabyte Technology Co., Ltd.` / `X670 AORUS ELITE AX` |
 | Chassis | laptop | desktop |
 | GPUs | Intel Iris Xe (`pci-0000:00:02.0`) + RTX 4070 Mobile (`pci-0000:01:00.0`) + DisplayLink evdi | RTX 5080 + AMD iGPU |
 | Displays | `eDP-1` 1920x1200@165 · `HDMI-A-1` 3440x1440@59.97 · `DVI-I-1` 1920x1080@60 | `DP-2` 3440x1440@99.98 · `DP-1` 2560x1440@240 |
