@@ -3,7 +3,8 @@
 
 # ble.sh: fish-style autosuggestions + syntax highlighting (the bash stand-in for
 # zsh-autosuggestions / zsh-syntax-highlighting on the Mac). Must load before the
-# Omarchy rc and attach at the very end. Guarded so machines without it are fine.
+# Omarchy rc and attach at the very end. Guarded so machines without it are fine;
+# install steps are in FOR_AGENT.md, Step 3.
 [[ -r ~/.local/share/blesh/ble.sh ]] && source ~/.local/share/blesh/ble.sh --noattach
 
 # All the default Omarchy aliases and functions
