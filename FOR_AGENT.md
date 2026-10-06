@@ -139,17 +139,33 @@ Step 5 is the authority; this is the checklist form:
    test -r ~/.local/share/blesh/ble.sh && echo installed || echo MISSING
    ```
 
-   If missing, build upstream into the user prefix, from a fresh empty directory (no root, not in
-   pacman):
+   If missing, install upstream's nightly tarball into the user prefix, from a fresh empty
+   directory (no root, not in pacman):
 
    ```bash
-   d=$(mktemp -d) && git clone --recursive --depth 1 --shallow-submodules \
-     https://github.com/akinomyoga/ble.sh "$d/ble.sh" && make -C "$d/ble.sh" install PREFIX="$HOME/.local"
+   d=$(mktemp -d) && cd "$d" && curl -fsSL \
+     https://github.com/akinomyoga/ble.sh/releases/download/nightly/ble-nightly.tar.xz | tar xJ \
+     && bash ble-nightly/ble.sh --install ~/.local/share
    ```
 
-   Verify in a new shell: `bash -ic 'echo $BLE_VERSION'` prints a version. Update later with
-   `ble-update`. **Do not use the AUR `blesh` / `blesh-git` packages** — both are about 2.5 years
-   stale.
+   **Install from the tarball, not a `git clone` + `make install`.** A clone-built install records
+   the clone's path as its update source, and `ble-update` then runs `git pull` there — so when the
+   `mktemp` directory is deleted, updating breaks. The tarball records `release:nightly-*`, which
+   needs no directory on disk. Confirm with
+   `grep -m1 '^_ble_base_repository=' ~/.local/share/blesh/ble.sh`.
+
+   Verify: `$BLE_VERSION` only exists in a shell with a controlling TTY, so
+   `bash -ic 'echo $BLE_VERSION'` run from a script prints **empty even when the install is fine**.
+   Check from a real terminal window instead, or under a pty:
+   `printf 'source ~/.local/share/blesh/ble.sh --noattach\necho "V=[$BLE_VERSION]"\nexit\n' | script -qec 'bash --noprofile --norc -i' /dev/null`.
+   **Do not use the AUR `blesh` / `blesh-git` packages** — both were last built 2024-04-27, and
+   `omarchy update` never refreshes `-git` packages. mise cannot track it either: upstream's current
+   code is only a rolling `nightly` release, which mise sees as one fixed version.
+
+   Updates are automatic: `hooks/post-update.d/update-blesh` runs `ble-update` after every
+   `omarchy update` (under `script`, since ble.sh will not load without a TTY — `bash -c` never
+   loads it at all). It is silent when current and exits 0 on every path. By hand, in a terminal:
+   `ble-update`.
 
    It only behaves if Ghostty's own bash integration is off. `.config/ghostty/config` sets
    `shell-integration = none`; with integration on, the first prompt of every new window is drawn

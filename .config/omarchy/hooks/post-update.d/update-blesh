@@ -1,0 +1,48 @@
+#!/bin/bash
+
+# Keep ble.sh current after an update.
+#
+# ble.sh (fish-style autosuggestions + syntax highlighting in bash) is installed
+# from upstream's nightly tarball into ~/.local/share/blesh -- see FOR_AGENT.md
+# Step 3. It is not in pacman or mise on purpose: the AUR packages stopped at
+# 2024-04, and upstream ships current code only as a rolling `nightly` release,
+# which mise would treat as one fixed version and never refresh. `ble-update` is
+# upstream's own updater, so run that.
+#
+# Two things about running it from a script:
+#   - ble.sh refuses to load without a controlling TTY ("cannot find a
+#     controlling TTY/PTY"), and `ble-update` then simply does not exist. So the
+#     shell runs under `script`, which supplies a pty, and gets its commands on
+#     stdin -- `bash -c` never loads ble.sh at all.
+#   - ble-update only knows where to update from if the install recorded it.
+#     A tarball install records `release:nightly-*` and needs nothing else. An
+#     install built from a git clone records that clone's path and breaks the day
+#     the clone is deleted (a mktemp dir, say) -- so install from the tarball.
+#
+# A failed update must not fail the whole `omarchy update`: every path exits 0.
+# Silent when ble.sh is not installed or already current.
+
+BLE="$HOME/.local/share/blesh/ble.sh"
+[[ -r $BLE ]] || exit 0
+command -v script >/dev/null || exit 0
+
+out=$(printf 'source %q --noattach\nble-update\nexit\n' "$BLE" |
+    timeout 180 script -qec 'bash --noprofile --norc -i' /dev/null 2>&1 |
+    tr -d '\r' | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g')
+
+# Only ble-update's own lines; the rest is the echoed terminal session.
+msg=$(grep -a '^ble-update.' <<<"$out")   # the dot skips the echoed command itself
+
+if [[ -z $msg ]]; then
+    echo -e "\e[33m\nble.sh update did not run\e[0m"
+    echo "Retry by hand in a terminal: ble-update"
+elif grep -qiE 'up to date' <<<"$msg"; then
+    :
+elif grep -qiE 'fail|error|not found|not available|unavailable' <<<"$msg"; then
+    echo -e "\e[33m\nble.sh update failed\e[0m"
+    echo "$msg" | tail -4
+else
+    echo -e "\e[32m\nble.sh updated\e[0m"
+    echo "$msg" | tail -3
+fi
+exit 0
