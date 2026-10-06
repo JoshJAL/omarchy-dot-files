@@ -22,6 +22,10 @@ cursor-style-blink = false
 # (all shell integration options must be passed together)
 shell-integration-features = no-cursor,ssh-env
 
+# Ghostty's bash integration doubles the first prompt line when ble.sh is on, so it
+# is off. Costs: ssh-env (terminfo over ssh), title-follows-cwd, jump-to-prompt.
+shell-integration = none
+
 # Keyboard bindings
 keybind = ctrl+a>n=new_window
 keybind = ctrl+a>t=new_tab
