@@ -133,13 +133,18 @@ Step 5 is the authority; this is the checklist form:
    that hook runs, a tracked `mimeapps.list` can name a handler this machine cannot resolve.
 4. **ble.sh** (fish-style autosuggestions and syntax highlighting in bash) — `.bashrc` loads it
    only if `~/.local/share/blesh/ble.sh` exists, so a machine without it works but silently has
-   no suggestions. Check, and install if missing:
+   no suggestions. Check it is installed **and** where it updates from:
 
    ```bash
    test -r ~/.local/share/blesh/ble.sh && echo installed || echo MISSING
+   grep -m1 '^_ble_base_repository=' ~/.local/share/blesh/ble.sh
    ```
 
-   If missing, install upstream's nightly tarball into the user prefix, from a fresh empty
+   `release:nightly-*` is correct. A `/tmp/...` or other directory path means it was built from a
+   `git clone`, and `ble-update` breaks the day that directory is deleted: reinstall with the
+   command below (it overwrites in place). If `MISSING`, run the same command.
+
+   Install upstream's nightly tarball into the user prefix, from a fresh empty
    directory (no root, not in pacman):
 
    ```bash
@@ -165,7 +170,8 @@ Step 5 is the authority; this is the checklist form:
    Updates are automatic: `hooks/post-update.d/update-blesh` runs `ble-update` after every
    `omarchy update` (under `script`, since ble.sh will not load without a TTY — `bash -c` never
    loads it at all). It is silent when current and exits 0 on every path. By hand, in a terminal:
-   `ble-update`.
+   `ble-update`. Right after a reinstall the first hook run can print "ble.sh update did not run"
+   (the terminal cache is being regenerated); run it again — a warm run is silent.
 
    It only behaves if Ghostty's own bash integration is off. `.config/ghostty/config` sets
    `shell-integration = none`; with integration on, the first prompt of every new window is drawn
