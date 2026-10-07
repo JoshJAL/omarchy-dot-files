@@ -28,7 +28,12 @@ if machine.is(machine.LAPTOP) then
   --                                   edge level with the portrait panel's
   --   eDP-1     top-left (2480, 1920) 1920x1200; flush under both bottom edges and
   --                                   centred on the x = 3440 seam (3440 - 1920/2)
-  hl.monitor({ output = "DVI-I-1",  mode = "1920x1080@60.0",  position = "3440x0",    scale = 1.0, vrr = 0, transform = 3 })
+  --
+  -- The DisplayLink connector number is not stable: evdi hands out a new one
+  -- whenever the dock re-enumerates (it became DVI-I-2 on 2026-10-07 after a
+  -- port swap, which silently dropped the rotation). Match the panel by EDID
+  -- description instead of by connector name.
+  hl.monitor({ output = "desc:LG Electronics LG IPS FULLHD 0x0003B989", mode = "1920x1080@60.0", position = "3440x0", scale = 1.0, vrr = 0, transform = 3 })
   hl.monitor({ output = "HDMI-A-1", mode = "3440x1440@59.97", position = "0x480",     scale = 1.0, vrr = 0 })
   hl.monitor({ output = "eDP-1",    mode = "1920x1200@165.0", position = "2480x1920", scale = 1.0, vrr = 0 })
 elseif machine.is(machine.DESKTOP) then
