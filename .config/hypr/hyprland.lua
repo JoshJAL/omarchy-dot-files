@@ -5,22 +5,18 @@ dofile((os.getenv("OMARCHY_PATH") or "/usr/share/omarchy") .. "/default/hypr/boo
 
 -- ---------------------------------------------------------------------------
 -- GPU setup. Both blocks below describe the work laptop's hybrid Intel/NVIDIA
--- graphics and are guarded so they no-op on the desktop, which has an RTX 5080
--- and an AMD iGPU and no Intel anything. Omarchy 4 configures NVIDIA itself in
--- default/hypr/nvidia.lua (NVD_BACKEND, LIBVA_DRIVER_NAME, __GLX_VENDOR_-
--- LIBRARY_NAME), gated on actually detecting the card -- so on the desktop the
--- correct behavior is to leave all of this alone and let Omarchy do it.
+-- graphics and are guarded so they no-op everywhere else. The desktop (RTX 5080
+-- and an AMD iGPU) and the Surface Book (Intel HD 520 only) have nothing to pin.
+-- Omarchy 4 configures NVIDIA itself in default/hypr/nvidia.lua (NVD_BACKEND,
+-- LIBVA_DRIVER_NAME, __GLX_VENDOR_LIBRARY_NAME), gated on actually detecting
+-- the card -- so on the desktop the correct behavior is to leave all of this
+-- alone and let Omarchy do it.
 --
--- The guard is the Intel iGPU's own by-path node. It exists only on the laptop.
-local intel_igpu = "/dev/dri/by-path/pci-0000:00:02.0-card"
-local function exists(path)
-  local f = io.open(path, "r")
-  if f then f:close() return true end
-  -- by-path entries are symlinks to device nodes; io.open can fail on those
-  -- even when present, so fall back to a stat.
-  return os.execute("test -e '" .. path .. "'") == true
-end
-local on_work_laptop = exists(intel_igpu)
+-- The guard is the machine's DMI id (hypr/machine.lua). It used to be "does the
+-- Intel iGPU's by-path node exist", but that is true of any Intel machine, so a
+-- second laptop silently inherited the work laptop's DRM ordering and iHD pin.
+local machine = require("hypr.machine")
+local on_work_laptop = machine.is(machine.LAPTOP)
 
 if on_work_laptop then
   -- Pin the DRM device order so the Intel iGPU is always the primary render
@@ -47,7 +43,7 @@ if on_work_laptop then
   -- are dropped, which is what keeps this correct when DisplayLink is unplugged
   -- and there is no evdi card at all.
   --
-  -- NOTE: this must stay behind the Intel guard. pci-0000:01:00.0-card resolves
+  -- NOTE: this must stay behind the work-laptop guard. pci-0000:01:00.0-card resolves
   -- on the desktop too, where it is the RTX 5080 rather than the 4070 Mobile --
   -- so unguarded, this block would silently pin the desktop to one card and
   -- hide its AMD iGPU from aquamarine.

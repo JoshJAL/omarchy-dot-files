@@ -48,28 +48,24 @@ weaker (it is a choice, and can collide on a fresh Omarchy install, which defaul
 
 ## Step 2 — Check whether the existing branches already cover it
 
-Exactly **two** tracked files branch on hardware today:
+These tracked files branch on hardware today, all through `hypr/machine.lua` (DMI vendor + product):
 
 | File | Discriminator | What it selects |
 |------|---------------|-----------------|
-| `.config/hypr/monitors.lua` | `ls -d /sys/class/drm/*-eDP-1` exists | laptop layout vs desktop layout |
-| `.config/hypr/hyprland.lua` | `/dev/dri/by-path/pci-0000:00:02.0-card` exists | `AQ_DRM_DEVICES` order + `LIBVA_DRIVER_NAME=iHD`, laptop-only |
+| `.config/hypr/machine.lua` | DMI `sys_vendor` + `product_name` | defines the machine ids; **add new machines here** |
+| `.config/hypr/monitors.lua` | `machine.is(...)` | per-machine layout, scale and `GDK_SCALE` |
+| `.config/hypr/hyprland.lua` | `machine.is(machine.LAPTOP)` | `AQ_DRM_DEVICES` order + `LIBVA_DRIVER_NAME=iHD`, work laptop only |
 
-**Both are two-way tests, and that is their limit.** They answer "is this the work laptop?" —
-anything that is not the work laptop falls into the desktop branch.
+**These are exact matches, not guesses.** A machine whose DMI pair is not in `machine.lua`
+matches no branch, so it gets no machine-specific monitor rules (Hyprland auto-arranges at each
+display's preferred mode) and none of the work laptop's GPU pins. That is a working but
+unconfigured desktop, not a wrong one.
 
-### The failure mode to expect on a third machine
+(Before the Surface Book was added these were two-way boolean tests -- "has an `eDP-1`", "has the
+Intel iGPU" -- and a second laptop silently took the work laptop's layout. That is why the
+discriminator is DMI now.)
 
-A **second laptop** satisfies `has_internal_panel()` and will silently take the work laptop's
-monitor layout: `eDP-1` forced to `1920x1200@165` at position `2351x1440`, plus an `HDMI-A-1`
-and `DVI-I-1` it may not have. Hyprland does not error on a rule for an absent output, so this
-looks like "my displays are in the wrong place", not like a config bug.
-
-A **second Intel machine** likewise satisfies the `hyprland.lua` guard and inherits the VA-API
-pin and the laptop's DRM device ordering.
-
-So: if this machine is not one of the two in *Known machines* below, **do not rely on the
-existing tests.** Go to Step 4.
+So: if this machine is not in *Known machines* below, it needs a branch. Go to Step 4.
 
 ---
 
@@ -91,51 +87,18 @@ worth version history.
 
 ## Step 4 — Add this machine as a branch
 
-### 4a. Two machines → three: upgrade the discriminator first
+### 4a. Register the machine in `machine.lua`
 
-The current boolean tests do not extend. Replace them with an explicit machine id. Add
-`~/.config/hypr/machine.lua`:
-
-```lua
--- Identify the machine from DMI. Stable across reinstalls, needs no hostname.
-local function dmi(field)
-  local f = io.open("/sys/devices/virtual/dmi/id/" .. field, "r")
-  if not f then return "" end
-  local v = f:read("*l") or ""
-  f:close()
-  return v
-end
-
-local id = dmi("sys_vendor") .. " " .. dmi("product_name")
-
-local M = {}
-M.id       = id
-M.is       = function(name) return id == name end
-M.LAPTOP   = "System76 Oryx Pro"
-M.DESKTOP  = "Gigabyte Technology Co., Ltd. X670 AORUS ELITE AX"
-return M
-```
-
-Then in `monitors.lua`:
+`~/.config/hypr/machine.lua` already exists (tracked). It reads DMI and exposes one constant per
+known machine. Add yours:
 
 ```lua
-local machine = require("hypr.machine")
-
-if machine.is(machine.LAPTOP) then
-  hl.monitor({ output = "eDP-1",    mode = "1920x1200@165.0", position = "2351x1440", scale = 1.0 })
-  hl.monitor({ output = "HDMI-A-1", mode = "3440x1440@59.97", position = "0x0",       scale = 1.0 })
-  hl.monitor({ output = "DVI-I-1",  mode = "1920x1080@60.0",  position = "3440x360",  scale = 1.0 })
-elseif machine.is(machine.DESKTOP) then
-  hl.monitor({ output = "DP-2", mode = "3440x1440@99.98",  position = "0x0",      scale = 1.0 })
-  hl.monitor({ output = "DP-1", mode = "2560x1440@240.00", position = "440x1440", scale = 1.0 })
-else
-  -- New machine: add a branch here. Get real values from `hyprctl monitors all`.
-end
+M.NEWBOX = "<sys_vendor> <product_name>"   -- exactly as `cat` prints them, joined by one space
 ```
 
-**Keep a fallback branch that does nothing rather than one that guesses.** With no `hl.monitor`
-call Hyprland auto-arranges at each display's preferred mode, which is a working desktop. A wrong
-explicit layout is not.
+Then in `monitors.lua`, add an `elseif machine.is(machine.NEWBOX) then` branch (set `GDK_SCALE`
+inside it -- it is per-machine now). Keep the fallback that does nothing rather than one that
+guesses; a wrong explicit layout is worse than Hyprland's auto-arrangement.
 
 ### 4b. Write this machine's values
 
@@ -205,13 +168,14 @@ machine on its next pull.
 
 ## Known machines
 
-| | Work laptop | Desktop |
-|---|---|---|
-| DMI | `System76` / `Oryx Pro` | `Gigabyte Technology Co., Ltd.` / `X670 AORUS ELITE AX` |
-| Chassis | laptop | desktop |
-| GPUs | Intel Iris Xe (`pci-0000:00:02.0`) + RTX 4070 Mobile (`pci-0000:01:00.0`) + DisplayLink evdi | RTX 5080 + AMD iGPU |
-| Displays | `eDP-1` 1920x1200@165 · `HDMI-A-1` 3440x1440@59.97 · `DVI-I-1` 1920x1080@60 | `DP-2` 3440x1440@99.98 · `DP-1` 2560x1440@240 |
-| Special | `AQ_DRM_DEVICES` pinned so Intel is the render device; `LIBVA_DRIVER_NAME=iHD` | Omarchy's own `nvidia.lua` handles everything; leave it alone |
+| | Work laptop | Desktop | Surface Book |
+|---|---|---|---|
+| DMI | `System76` / `Oryx Pro` | `Gigabyte Technology Co., Ltd.` / `X670 AORUS ELITE AX` | `Microsoft Corporation` / `Surface Book` |
+| Chassis | laptop | desktop | laptop |
+| GPUs | Intel Iris Xe (`pci-0000:00:02.0`) + RTX 4070 Mobile (`pci-0000:01:00.0`) + DisplayLink evdi | RTX 5080 + AMD iGPU | Intel HD 520 (`pci-0000:00:02.0`) only |
+| Displays | `eDP-1` 1920x1200@165 · `HDMI-A-1` 3440x1440@59.97 · `DVI-I-1` 1920x1080@60 | `DP-2` 3440x1440@99.98 · `DP-1` 2560x1440@240 | `eDP-1` 3000x2000@59.98, scale 2 (HiDPI) |
+| `GDK_SCALE` | 1 | 1 | 2 |
+| Special | `AQ_DRM_DEVICES` pinned so Intel is the render device; `LIBVA_DRIVER_NAME=iHD` | Omarchy's own `nvidia.lua` handles everything; leave it alone | Nothing pinned. No ghostty/helium installed at first setup (2026-10-07), so terminal fell back to foot and browser to chromium until installed |
 
 The laptop's `DVI-I-1` is a DisplayLink output over `evdi`. It disappears when the dock is
 unplugged, and its card number shifts between boots because `evdi` is a platform device — which

@@ -47,12 +47,12 @@ hostnamectl chassis
 ```
 
 Compare that `sys_vendor` / `product_name` pair against the *Known machines* table at the bottom
-of `NEW-MACHINE.md`.
+of `NEW-MACHINE.md` (three today).
 
 **If it is not in that table, stop and follow `NEW-MACHINE.md` instead.** Everything below
-assumes the hardware branches in `monitors.lua` and `hyprland.lua` already cover this machine.
-They are two-way tests, so a machine they were not written for does not fail loudly — it silently
-takes the other machine's branch and comes up with the wrong monitor layout.
+assumes `hypr/machine.lua` already knows this machine. It matches on the exact DMI pair, so an
+unknown machine gets no machine-specific rules rather than a neighbour's: no error, but also an
+unconfigured, auto-arranged desktop — which looks like "my displays are in the wrong place".
 
 ---
 
