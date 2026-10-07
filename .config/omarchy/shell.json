@@ -7,9 +7,9 @@
           "id": "omarchy.indicators"
         },
         {
-          "id": "omarchy.clock",
           "format": "ddd d MMM h:mm AP",
           "formatAlt": "d MMMM 'W'ww yyyy",
+          "id": "omarchy.clock",
           "verticalFormat": "h\n—\nmm\nAP"
         },
         {
@@ -30,12 +30,12 @@
           "id": "omarchy.workspaces"
         },
         {
-          "id": "joshjal.taskbar",
-          "previewDelay": 320,
-          "includeSpecial": true,
           "classIconOverrides": {
             "com.t3tools.T3Code": "t3code"
-          }
+          },
+          "id": "joshjal.taskbar",
+          "includeSpecial": true,
+          "previewDelay": 320
         }
       ],
       "right": [
@@ -58,11 +58,11 @@
           "id": "omarchy.audio"
         },
         {
-          "id": "cpu",
-          "type": "command",
           "exec": "~/.config/omarchy/bar/scripts/cpu-status",
+          "id": "cpu",
           "interval": 5,
-          "onClick": "omarchy-launch-or-focus-tui btop"
+          "onClick": "omarchy-launch-or-focus-tui btop",
+          "type": "command"
         },
         {
           "id": "omarchy.monitor"
