@@ -48,7 +48,7 @@ cp "${SCREENSAVERS[RANDOM % ${#SCREENSAVERS[@]}]}" ~/.config/omarchy/branding/ab
 fastfetch
 
 # Turso
-export PATH="$PATH:/home/joshjal/.turso"
+export PATH="$PATH:$HOME/.turso"
 
 # Bare dotfiles repo (work-tree = $HOME). See ~/README.md
 alias dotfiles='git --git-dir=$HOME/.dotfiles --work-tree=$HOME'

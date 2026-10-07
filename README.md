@@ -65,11 +65,19 @@ exactly one file, `~/.config/omarchy/branding/screensaver.txt`, and its
 `--random-effect` flag randomizes the animation, not the art. Omarchy 4's idle
 service calls the command hardcoded through `bash -lc`, and there is no
 screensaver hook, so the only way to randomize the art on the *automatic* idle
-screensaver is to shadow the command on the login-shell PATH — which is what the
+screensaver is to shadow the command in login shells — which is what the
 tracked `~/.local/bin/omarchy-launch-screensaver` does before exec'ing the real
 one. `SUPER+S` in `hypr/bindings.lua` calls it by absolute path, since Hyprland's
 exec dispatcher does not go through a login shell. Delete that file and both
 paths silently fall back to a single fixed screensaver.
+
+**How the shadow is wired matters.** Shadowing by PATH order worked until Omarchy
+4.0.4, whose `env-bootstrap` *appends* `~/.local/bin` so system binaries keep
+precedence — the packaged `/usr/bin` copy then wins and the script never runs. The
+fix is a shell function of the same name in `~/.bash_profile` that calls the
+tracked script. A function beats PATH lookup, and `bash -lc` reads `.bash_profile`,
+so the idle path is covered without reordering PATH for every command. Verify with
+`bash -lc 'type -t omarchy-launch-screensaver'` (want: `function`).
 
 Its predecessor, `~/.local/bin/omarchy-random-screensaver.sh`, was **deleted**
 (2026-09-13). It did the same copy without the PATH shadowing or the self-exec
@@ -91,17 +99,22 @@ their config directories are no longer tracked either; the bar lives entirely in
 
 ### Machine-specific config
 
-Two machines share this repo: a work laptop (hybrid Intel/NVIDIA, three
-displays) and a desktop (RTX 5080 + AMD iGPU, two DisplayPort displays). Rather
+Three machines share this repo: a work laptop (hybrid Intel/NVIDIA, three
+displays), a desktop (RTX 5080 + AMD iGPU, two DisplayPort displays) and a Surface
+Book (Intel HD 520, one HiDPI panel). Settings are meant to be identical; only
+hardware-driven values differ. The machine table is in `NEW-MACHINE.md`. Rather
 than let those diverge and conflict on every pull, the two files that differ
 detect their hardware at config-read time and branch:
 
-- `hypr/monitors.lua` — branches on whether an `eDP-1` connector exists under
-  `/sys/class/drm` (the laptop's built-in panel). The connector names overlap
-  between the machines, so the layouts cannot simply be concatenated.
+- `hypr/machine.lua` — the discriminator: reads DMI `sys_vendor` + `product_name`
+  and exposes `machine.is(machine.LAPTOP | DESKTOP | SURFACE)`. A machine this
+  file does not know matches nothing, so it gets no machine-specific config.
+- `hypr/monitors.lua` — one branch per machine (layout, scale, `GDK_SCALE`). The
+  connector names overlap between machines, so the layouts cannot be concatenated.
+  An unknown machine gets no rules and Hyprland auto-arranges.
 - `hypr/hyprland.lua` — the `AQ_DRM_DEVICES` ordering and the `LIBVA_DRIVER_NAME=iHD`
-  VA-API pin are both laptop-only, gated on the Intel iGPU's by-path node. On the
-  desktop they no-op and Omarchy's own `default/hypr/nvidia.lua` takes over.
+  VA-API pin are work-laptop-only. Everywhere else they no-op; on the desktop
+  Omarchy's own `default/hypr/nvidia.lua` takes over.
 
 Add a machine by adding a branch, not by committing a divergent file.
 
@@ -260,7 +273,7 @@ On a new machine the unit needs enabling once:
 systemctl --user enable --now sync-browser-menu.path
 ```
 
-### Why `mimeapps.list` can stay shared between both machines
+### Why `mimeapps.list` can stay shared between all machines
 
 The same apps carry different `.desktop` **names** per machine — helium is a packaged
 `helium.desktop` on the laptop and a hand-made `helium-browser.desktop` (AppImage) on the
