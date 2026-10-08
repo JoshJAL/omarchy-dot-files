@@ -15,3 +15,4 @@ rose-pine-dark     https://github.com/guilhermetk/omarchy-rose-pine-dark
 snow_black         https://github.com/ankur311sudo/snow_black
 solarizedosaka     https://github.com/motorsss/omarchy-solarizedosaka-theme
 vhs80              https://github.com/tahayvr/omarchy-vhs80-theme
+inkypinky          https://github.com/HANCORE-linux/omarchy-inkypinky-theme
