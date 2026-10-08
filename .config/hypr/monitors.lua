@@ -7,6 +7,15 @@
 -- panel), while the Surface Book's 3000x2000 panel is HiDPI and keeps 2.
 local machine = require("hypr.machine")
 
+-- Both laptops' panels are eDP-1, and Omarchy's lid/wake script
+-- (omarchy-hyprland-monitor-clamshell) reads this file as text, taking the
+-- FIRST eDP-1 rule's scale and ignoring the branches below. With literals it
+-- saw the work laptop's 1.0 and forced the Surface to 1 on every lid open,
+-- unlock and screensaver wake. Every eDP-1 rule therefore names this local,
+-- whose value is an expression the script cannot resolve, so it leaves the
+-- compositor's (correct) scale alone.
+local internal_scale = machine.is(machine.SURFACE) and 2.0 or 1.0
+
 -- Three machines share this repo and their connector names overlap -- the laptop
 -- and the desktop both have an HDMI-A-1 -- so the layouts cannot simply be
 -- concatenated: the desktop would pick up the laptop's 3440x1440 HDMI rule the
@@ -35,7 +44,7 @@ if machine.is(machine.LAPTOP) then
   -- description instead of by connector name.
   hl.monitor({ output = "desc:LG Electronics LG IPS FULLHD 0x0003B989", mode = "1920x1080@60.0", position = "3440x0", scale = 1.0, vrr = 0, transform = 3 })
   hl.monitor({ output = "HDMI-A-1", mode = "3440x1440@59.97", position = "0x480",     scale = 1.0, vrr = 0 })
-  hl.monitor({ output = "eDP-1",    mode = "1920x1200@165.0", position = "2480x1920", scale = 1.0, vrr = 0 })
+  hl.monitor({ output = "eDP-1",    mode = "1920x1200@165.0", position = "2480x1920", scale = internal_scale, vrr = 0 })
 elseif machine.is(machine.DESKTOP) then
   hl.env("GDK_SCALE", "1")
 
@@ -61,5 +70,5 @@ elseif machine.is(machine.SURFACE) then
   -- 1500x1000 logical is too cramped.
   hl.env("GDK_SCALE", "2")
   hl.monitor({ output = "",      mode = "preferred",        position = "auto",  scale = "auto" })
-  hl.monitor({ output = "eDP-1", mode = "3000x2000@59.98",  position = "0x0",   scale = 2.0 })
+  hl.monitor({ output = "eDP-1", mode = "3000x2000@59.98",  position = "0x0",   scale = internal_scale })
 end
