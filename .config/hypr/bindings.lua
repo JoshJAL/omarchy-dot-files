@@ -116,3 +116,12 @@ hl.bind("CTRL + SHIFT + 2", hl.dsp.global("com.t3tools.T3Code:capture-window"))
 -- already open. SUPER+SHIFT+ALT+W is free; W for "work". Absolute path because
 -- the exec dispatcher gets no login shell, so ~/.local/bin is not on PATH.
 o.bind("SUPER + SHIFT + ALT + W", "Launch work apps", os.getenv("HOME") .. "/.local/bin/launch-work-apps")
+
+-- Rounded corners on/off, for every theme. SUPER+BACKSPACE (transparency),
+-- SUPER+SHIFT+BACKSPACE (gaps) and SUPER+CTRL+BACKSPACE (square aspect) are
+-- Omarchy's look'n'feel toggles; ALT is the free slot in that family.
+-- The script writes a toggle flag that loads after the theme, so it overrides
+-- whatever rounding the theme sets. `omarchy-corners-toggle auto` hands control
+-- back to the theme. Absolute path: exec gets no login shell, so ~/.local/bin
+-- is not on PATH.
+o.bind("SUPER + ALT + BACKSPACE", "Toggle rounded corners", os.getenv("HOME") .. "/.local/bin/omarchy-corners-toggle")
