@@ -1,4 +1,4 @@
 #!/bin/bash
-pkill -9 -x zed 2>/dev/null
+pkill -9 -x zed-editor 2>/dev/null
 sleep 0.5
-"$HOME/.local/zed.app/bin/zed" --foreground "$@" &
+zeditor --foreground "$@" &
