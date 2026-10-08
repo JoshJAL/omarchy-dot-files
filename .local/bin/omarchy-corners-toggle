@@ -1,0 +1,66 @@
+#!/bin/bash
+# Toggle rounded window corners on or off, whatever the current theme says.
+#
+# Usage: omarchy-corners-toggle [toggle|round|square|auto|status]
+#
+# Writes ~/.local/state/omarchy/toggles/hypr/corners.lua, which Omarchy loads
+# AFTER the theme (default/hypr/toggles.lua), so it wins over every theme's own
+# `decoration.rounding`. The shell's Style.cornerRadius mirrors that value, so
+# the bar, panels and toggles follow. `auto` deletes the override and hands
+# control back to the theme.
+#
+# Keybinding: SUPER + ALT + BACKSPACE (hypr/bindings.lua).
+
+RADIUS=8
+FLAG="$HOME/.local/state/omarchy/toggles/hypr/corners.lua"
+
+current_rounding() {
+  hyprctl -j getoption decoration:rounding | jq -r '.int'
+}
+
+write_flag() {
+  mkdir -p "$(dirname "$FLAG")"
+  cat >"$FLAG" <<EOF
+-- Written by omarchy-corners-toggle. Overrides the theme's window rounding.
+hl.config({
+  decoration = {
+    rounding = $1,
+  },
+})
+EOF
+}
+
+action="${1:-toggle}"
+
+case $action in
+  status)
+    echo "rounding=$(current_rounding) override=$([[ -f $FLAG ]] && echo yes || echo no)"
+    exit 0
+    ;;
+  toggle)
+    if (($(current_rounding) > 0)); then action=square; else action=round; fi
+    ;;
+esac
+
+case $action in
+  round)  write_flag "$RADIUS"; label="Rounded corners" ;;
+  square) write_flag 0;         label="Square corners" ;;
+  auto)   rm -f "$FLAG";        label="Corners follow theme" ;;
+  *)
+    echo "Usage: omarchy-corners-toggle [toggle|round|square|auto|status]" >&2
+    exit 1
+    ;;
+esac
+
+hyprctl reload >/dev/null
+sleep 0.3
+
+# The shell only re-polls decoration:rounding on a theme apply or when the
+# window-no-gaps flag changes, so re-send the current theme to make it do so.
+# Same payloads omarchy-theme-set uses; colors don't change.
+theme_dir="$HOME/.local/state/omarchy/current/theme"
+colors_payload=$([[ -f $theme_dir/colors.toml ]] && base64 -w 0 "$theme_dir/colors.toml")
+shell_payload=$([[ -f $theme_dir/shell.toml ]] && base64 -w 0 "$theme_dir/shell.toml")
+timeout 2 omarchy-shell shell applyTheme "$colors_payload" "$shell_payload" >/dev/null 2>&1 || true
+
+notify-send -t 1500 "$label" "decoration:rounding = $(current_rounding)" 2>/dev/null || true
