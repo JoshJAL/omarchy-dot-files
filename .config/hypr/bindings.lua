@@ -125,3 +125,36 @@ o.bind("SUPER + SHIFT + ALT + W", "Launch work apps", os.getenv("HOME") .. "/.lo
 -- back to the theme. Absolute path: exec gets no login shell, so ~/.local/bin
 -- is not on PATH.
 o.bind("SUPER + ALT + BACKSPACE", "Toggle rounded corners", os.getenv("HOME") .. "/.local/bin/omarchy-corners-toggle")
+
+-- Universal select all on SUPER+A, the missing sibling of Omarchy's universal
+-- copy/cut/paste on SUPER+C/X/V (default/hypr/bindings/clipboard.lua). Plain
+-- SUPER+A was unbound; only the modified variants (Agent, Audio, ChatGPT,
+-- Claude) use A.
+--
+-- Same send_key_state down/up split as the stock clipboard bindings, which
+-- works around Hyprland leaving synthetic key state stuck. Ghostty gets
+-- CTRL+SHIFT+A, its built-in select_all (the whole scrollback), because plain
+-- Ctrl+A there is the tmux-style prefix set in ~/.config/ghostty/config. Follow
+-- with SUPER+C to copy it. Other terminals are skipped: they have no select-all
+-- and Ctrl+A is readline "start of line". Terminal tag comes from
+-- default/hypr/apps/terminals.lua, as in the stock file.
+local function send_select_all(mods)
+  hl.dispatch(hl.dsp.send_key_state({ mods = mods, key = "A", state = "down" }))
+  hl.timer(function()
+    hl.dispatch(hl.dsp.send_key_state({ mods = mods, key = "A", state = "up" }))
+  end, { timeout = 50, type = "oneshot" })
+end
+
+o.bind("SUPER + A", "Universal select all", function()
+  local window = hl.get_active_window()
+  for _, tag in ipairs(window and window.tags or {}) do
+    if tag:gsub("%*$", "") == "terminal" then
+      if window.class == "com.mitchellh.ghostty" then
+        send_select_all("CTRL SHIFT")
+      end
+      return
+    end
+  end
+
+  send_select_all("CTRL")
+end)
