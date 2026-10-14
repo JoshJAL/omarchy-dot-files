@@ -158,3 +158,9 @@ o.bind("SUPER + A", "Universal select all", function()
 
   send_select_all("CTRL")
 end)
+
+-- Bar transparency on/off. Window transparency is SUPER+BACKSPACE and that
+-- family is full (gaps, square aspect, rounded corners), so the bar gets
+-- SUPER+ALT+T, next to SUPER+T (floating/tiling). Stock command; it flips
+-- bar.transparent in ~/.config/omarchy/shell.json, which the shell hot-reloads.
+o.bind("SUPER + ALT + T", "Toggle bar transparency", "omarchy bar transparent toggle")
