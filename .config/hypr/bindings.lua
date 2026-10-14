@@ -7,9 +7,11 @@
 --
 -- Check what's bound with: omarchy menu keybindings --print
 
--- Typora, where Omarchy 4 puts Omawrite.
+-- Typora, where Omarchy 4 puts Omawrite on SUPER+SHIFT+W. That slot now belongs
+-- to "Reopen closed window" (further down), so Typora moves up one modifier
+-- tier to SUPER+CTRL+SHIFT+W. The unbind is still needed: it clears Omawrite.
 hl.unbind("SUPER + SHIFT + W")
-o.bind("SUPER + SHIFT + W", "Typora", { launch = "typora --enable-wayland-ime" })
+o.bind("SUPER + CTRL + SHIFT + W", "Typora", { launch = "typora --enable-wayland-ime" })
 
 -- Claude, where Omarchy 4 puts Grok.
 hl.unbind("SUPER + SHIFT + ALT + A")
@@ -78,14 +80,110 @@ o.bind("SUPER + SHIFT + TAB", "Previous workspace on this monitor", hl.dsp.focus
 -- window and CTRL+ALT+DELETE for every window on every workspace -- on three
 -- monitors the latter wipes all three screens and dumps you on workspace 1, so
 -- there was nothing for "clear the screen I am looking at". SUPER+ALT+W is the
--- only free slot left in the W family (SHIFT=Typora, CTRL=Network,
--- CTRL+ALT=Weather) and reads as the escalation of SUPER+W next door.
+-- only free slot left in the W family (SHIFT=Reopen closed window,
+-- CTRL=Network, CTRL+ALT=Weather) and reads as the escalation of SUPER+W next
+-- door.
 --
 -- Two or more windows get a confirmation listing the count and the apps;
 -- a single window closes outright, same as SUPER+W. Absolute path for the same
 -- reason as the bindings above: the exec dispatcher gets no login shell, so the
 -- PATH entry for ~/.local/bin is not there.
 o.bind("SUPER + ALT + W", "Close all windows on workspace", os.getenv("HOME") .. "/.local/bin/hypr-workspace-close-all")
+
+-- Reopen the window you just closed, on SUPER+SHIFT+W. Hyprland keeps no
+-- history of closed windows, so SUPER+W (or SUPER+ALT+W, or an app quitting) was
+-- final. This records each close and ~/.local/bin/hypr-window-reopen relaunches
+-- the newest one. Repeated presses walk backwards, so a bulk close from
+-- SUPER+ALT+W or CTRL+ALT+DELETE can be undone one window at a time. Only the
+-- app comes back; its contents and position do not.
+--
+-- The record is a tmpfs file, not an in-memory table: `hyprctl reload` re-runs
+-- this whole file in a fresh Lua state (checked: a table here is empty after a
+-- reload), so a table would lose the history on every config edit. The file is
+-- in $XDG_RUNTIME_DIR, so it is gone at logout and never lands on disk. It stays
+-- short by construction: at most CLOSED_MAX lines, and a line older than
+-- CLOSED_MAX_AGE is dropped on the next close and ignored by the script. Those
+-- two numbers are duplicated in hypr-window-reopen (MAX_AGE) -- keep them in step.
+--
+-- Line format, one per close, oldest first: <epoch> TAB <class> TAB <argv>,
+-- with the argv joined by 0x1f. The argv is a fallback for apps with no .desktop
+-- entry; the script prefers the entry, because Helium webapps and ordinary Helium
+-- windows are one process and share an argv. It is read at window.open (the
+-- process may be gone by the time of the close) and again at close for windows
+-- that were already open before the last reload.
+--
+-- window.close fires for every kind of close, so an app quitting itself is
+-- recorded too; the expiry bounds how long it lingers. Windows with an empty
+-- class are skipped: they are transient dialogs, like the Chromium "Profile
+-- error occurred" ones. The window.destroy payload has no fields (address is
+-- nil), so the per-window argv table is cleared at close instead.
+local CLOSED_FILE = (os.getenv("XDG_RUNTIME_DIR") or "/tmp") .. "/hypr-closed-windows.tsv"
+local CLOSED_MAX = 10
+local CLOSED_MAX_AGE = 60 * 60 -- seconds
+local opened_argv = {}
+
+local function read_argv(pid)
+  local f = pid and io.open("/proc/" .. pid .. "/cmdline", "rb")
+  if not f then
+    return nil
+  end
+  local raw = f:read("a")
+  f:close()
+  if not raw or raw == "" then
+    return nil
+  end
+  return (raw:gsub("[\t\r\n]", " "):gsub("%z$", ""):gsub("%z", "\31"))
+end
+
+hl.on("window.open", function(window)
+  pcall(function()
+    opened_argv[window.address] = read_argv(window.pid)
+  end)
+end)
+
+hl.on("window.close", function(window)
+  pcall(function()
+    local argv = opened_argv[window.address] or read_argv(window.pid)
+    opened_argv[window.address] = nil
+
+    local class = (window.class or ""):gsub("[\t\r\n]", " ")
+    if class == "" then
+      return
+    end
+
+    local now = os.time()
+    local keep = {}
+    local f = io.open(CLOSED_FILE, "r")
+    if f then
+      for line in f:lines() do
+        local t = tonumber(line:match("^(%d+)\t"))
+        if t and now - t < CLOSED_MAX_AGE then
+          keep[#keep + 1] = line
+        end
+      end
+      f:close()
+    end
+    keep[#keep + 1] = table.concat({ now, class, argv or "" }, "\t")
+    while #keep > CLOSED_MAX do
+      table.remove(keep, 1)
+    end
+
+    -- Write beside the file and rename over it, so the script never reads half
+    -- of one.
+    local tmp = CLOSED_FILE .. ".lua"
+    local out = io.open(tmp, "w")
+    if out then
+      out:write(table.concat(keep, "\n"), "\n")
+      out:close()
+      os.rename(tmp, CLOSED_FILE)
+    end
+  end)
+end)
+
+-- Takes SUPER+SHIFT+W from Typora (now SUPER+CTRL+SHIFT+W, see the top of this
+-- file); the unbind up there already cleared Omarchy's Omawrite. Absolute path:
+-- the exec dispatcher gets no login shell, so ~/.local/bin is not on PATH.
+o.bind("SUPER + SHIFT + W", "Reopen closed window", os.getenv("HOME") .. "/.local/bin/hypr-window-reopen")
 
 -- Dropped from the old config, deliberately:
 --

@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# Reopen the window you most recently closed (SUPER + SHIFT + W).
+#
+# Hyprland keeps no history of closed windows, so ~/.config/hypr/bindings.lua
+# records each close (a window.close handler) as one line in a tmpfs file:
+#
+#   <epoch>\t<window class>\t<argv, joined with 0x1f>
+#
+# This script is the other half: it pops the newest line that is still fresh and
+# relaunches that app. Repeated presses walk backwards through what you closed,
+# so a bulk close (SUPER + ALT + W) can be undone one window at a time.
+#
+# Nothing is logged to disk. The file lives in $XDG_RUNTIME_DIR (tmpfs, gone at
+# logout), the Lua side caps it at 10 lines, and entries older than MAX_AGE are
+# ignored and dropped here. MAX_AGE and the cap are duplicated in bindings.lua --
+# keep them in step.
+#
+# Relaunching the app is all this does: contents and position are not restored.
+#
+#   hypr-window-reopen                      pop the newest closed window and launch it
+#   hypr-window-reopen --resolve CLASS [ARGV]   print what would run, change nothing
+#
+# How an app is found, in order:
+#
+#   1. A .desktop entry whose StartupWMClass matches the class.
+#   2. A .desktop entry whose file name matches the class (com.t3tools.T3Code,
+#      Alacritty, ...).
+#   3. For Chromium-family webapps, whose class is generated from the page URL
+#      (chrome-outlook.office.com__mail_-Default): a .desktop entry whose Exec
+#      line contains that host. Several can share a host (Outlook and Calendar);
+#      the one that also contains the first path segment wins.
+#   4. The argv recorded when the window opened.
+#
+# The desktop entry goes first on purpose. Helium webapps and ordinary Helium
+# windows are the same process, so their recorded argv is identical and
+# replaying it would open a plain browser instead of Outlook or Teams.
+set -euo pipefail
+
+readonly STATE=${XDG_RUNTIME_DIR:-/tmp}/hypr-closed-windows.tsv
+readonly MAX_AGE=3600 # seconds
+readonly APP_DIRS=("$HOME/.local/share/applications" /usr/share/applications)
+readonly US=$'\x1f'
+readonly GLYPH_RESTORE=$'\U000F059E' # nf-md-window_restore
+
+notify() { omarchy-notification-send -g "$GLYPH_RESTORE" "$1" "$2" -t 2500 || true; }
+
+# Print the path of the .desktop entry for a window class, or nothing.
+find_desktop() {
+  local class=$1 dir f base host path rest hit
+
+  for dir in "${APP_DIRS[@]}"; do
+    [[ -d $dir ]] || continue
+    hit=$(grep -lixF "StartupWMClass=$class" "$dir"/*.desktop 2>/dev/null | head -n1 || true)
+    [[ -n $hit ]] && { printf '%s\n' "$hit"; return; }
+  done
+
+  for dir in "${APP_DIRS[@]}"; do
+    for f in "$dir"/*.desktop; do
+      [[ -e $f ]] || continue
+      base=${f##*/}
+      base=${base%.desktop}
+      [[ ${base,,} == "${class,,}" ]] && { printf '%s\n' "$f"; return; }
+    done
+  done
+
+  # chrome-<host>__<path with / as _>-<profile>
+  if [[ $class == chrome-* ]]; then
+    rest=${class#chrome-}
+    host=${rest%%__*}
+    path=
+    [[ $rest == *__* ]] && { path=${rest#*__}; path=${path%%_*}; }
+    for dir in "${APP_DIRS[@]}"; do
+      [[ -d $dir ]] || continue
+      if [[ -n $path ]]; then
+        hit=$(grep -lF "$host/$path" "$dir"/*.desktop 2>/dev/null | head -n1 || true)
+        [[ -n $hit ]] && { printf '%s\n' "$hit"; return; }
+      fi
+      hit=$(grep -lF "$host" "$dir"/*.desktop 2>/dev/null | head -n1 || true)
+      [[ -n $hit ]] && { printf '%s\n' "$hit"; return; }
+    done
+  fi
+}
+
+# launch CLASS ARGV [dry]  -- returns 1 if there is nothing to launch with.
+launch() {
+  local class=$1 argv_raw=$2 dry=${3:-} desktop id
+  local -a argv=()
+
+  desktop=$(find_desktop "$class")
+  if [[ -n $desktop ]]; then
+    id=${desktop##*/}
+    if [[ -n $dry ]]; then printf 'desktop: %s\n' "$desktop"; return 0; fi
+    setsid -f uwsm-app -- "$id" >/dev/null 2>&1
+    return 0
+  fi
+
+  if [[ -n $argv_raw ]]; then
+    IFS=$US read -ra argv <<<"$argv_raw"
+    if (( ${#argv[@]} )); then
+      if [[ -n $dry ]]; then printf 'argv: %s\n' "${argv[*]}"; return 0; fi
+      setsid -f uwsm-app -- "${argv[@]}" >/dev/null 2>&1
+      return 0
+    fi
+  fi
+  return 1
+}
+
+if [[ ${1:-} == --resolve ]]; then
+  launch "${2:?class required}" "${3:-}" dry || { echo "unresolved: $2"; exit 1; }
+  exit 0
+fi
+
+if [[ ! -s $STATE ]]; then
+  notify "Nothing to reopen" "No window closed in the last hour."
+  exit 0
+fi
+
+# Newest last. Keep only fresh lines, pop the final one, write the rest back
+# through a rename so a concurrent close in the Lua handler never sees half a file.
+now=$(date +%s)
+mapfile -t lines < <(awk -F'\t' -v min=$((now - MAX_AGE)) '$1 >= min' "$STATE")
+
+if (( ${#lines[@]} == 0 )); then
+  : >"$STATE"
+  notify "Nothing to reopen" "No window closed in the last hour."
+  exit 0
+fi
+
+last=${lines[-1]}
+tmp=$(mktemp "$STATE.XXXXXX")
+if (( ${#lines[@]} > 1 )); then printf '%s\n' "${lines[@]:0:${#lines[@]}-1}" >"$tmp"; else : >"$tmp"; fi
+mv -f "$tmp" "$STATE"
+
+IFS=$'\t' read -r _ class argv_raw <<<"$last"
+
+launch "$class" "${argv_raw:-}" || notify "Can't reopen" "No launcher known for $class."
