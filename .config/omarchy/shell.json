@@ -79,6 +79,16 @@
     "lock": 3600,
     "screensaver": 1800
   },
-  "plugins": [],
-  "version": 1
+  "plugins": [
+    {
+      "id": "joshjal.notifications"
+    }
+  ],
+  "version": 1,
+  "disabledPlugins": [
+    "omarchy.notifications"
+  ],
+  "cloneSourceRestores": [
+    "joshjal.notifications"
+  ]
 }
