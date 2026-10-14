@@ -76,6 +76,7 @@
 /.config/omarchy/branding/screensaver.txt
 /.config/omarchy/plugins/*
 !/.config/omarchy/plugins/joshjal.taskbar/
+!/.config/omarchy/plugins/joshjal.notifications/
 
 # --- ~/.local --------------------------------------------------------------
 # ~/.local/bin also holds generated mise wrappers, so name our scripts rather
