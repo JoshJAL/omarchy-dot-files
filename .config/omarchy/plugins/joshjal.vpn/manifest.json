@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "joshjal.vpn",
+  "name": "VPN",
+  "version": "0.1.0",
+  "author": "joshjal",
+  "license": "MIT",
+  "description": "Pick and switch VPNs from the bar: NetworkManager (WireGuard/OpenVPN), Tailscale, NordVPN, Mullvad.",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "Panel.qml" },
+  "barWidget": {
+    "displayName": "VPN",
+    "description": "Unified VPN picker. Backends that are not installed are hidden.",
+    "category": "Network",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": { "refreshIntervalSec": 30 },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 5,
+        "max": 3600,
+        "step": 5,
+        "defaultValue": 30
+      }
+    ]
+  }
+}
