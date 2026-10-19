@@ -141,6 +141,10 @@ These are ignored by design and will not arrive with a clone:
    machine that has them. Recreate only on a work machine.
 5. **`~/.dotfiles/info/exclude`** — local-only, not pushed. It is now redundant with `.gitignore`;
    no action needed.
+6. **Windows 11 GPU VM** (`~/win11-gpu-vm/`) — work laptop only today. If this machine already runs
+   the VM (`/etc/win11-vm.conf` exists), run `~/win11-gpu-vm/install.sh --check`. If it should
+   start running one, follow `~/win11-gpu-vm/FOR_AGENT.md` from the top (`detect.sh` decides
+   whether the hardware can). Otherwise skip it; nothing else depends on it.
 
 ---
 
@@ -173,9 +177,9 @@ machine on its next pull.
 | DMI | `System76` / `Oryx Pro` | `Gigabyte Technology Co., Ltd.` / `X670 AORUS ELITE AX` | `Microsoft Corporation` / `Surface Book` |
 | Chassis | laptop | desktop | laptop |
 | GPUs | Intel Iris Xe (`pci-0000:00:02.0`) + RTX 4070 Mobile (`pci-0000:01:00.0`) + DisplayLink evdi | RTX 5080 + AMD iGPU | Intel HD 520 (`pci-0000:00:02.0`) only |
-| Displays | `eDP-1` 1920x1200@165 · `HDMI-A-1` 3440x1440@59.97 · `DVI-I-1` 1920x1080@60 | `DP-2` 3440x1440@99.98 · `DP-1` 2560x1440@240 | `eDP-1` 3000x2000@59.98, scale 2 (HiDPI) |
+| Displays | `eDP-1` 1920x1200@165 · LG ultrawide on Thunderbolt `DP-1` (Intel; was `HDMI-A-1` on the 4070) 3440x1440@59.97 · `DVI-I-1` 1920x1080@60 | `DP-2` 3440x1440@99.98 · `DP-1` 2560x1440@240 | `eDP-1` 3000x2000@59.98, scale 2 (HiDPI) |
 | `GDK_SCALE` | 1 | 1 | 2 |
-| Special | `AQ_DRM_DEVICES` pinned so Intel is the render device; `LIBVA_DRIVER_NAME=iHD` | Omarchy's own `nvidia.lua` handles everything; leave it alone | Nothing pinned. No ghostty/helium installed at first setup (2026-10-07), so terminal fell back to foot and browser to chromium until installed |
+| Special | `AQ_DRM_DEVICES` pinned so Intel is the render device; `LIBVA_DRIVER_NAME=iHD`; `hypr/gpu-vm-mode` flag frees the 4070 for the `win11-gpu-vm/` VM | Omarchy's own `nvidia.lua` handles everything; leave it alone | Nothing pinned. No ghostty/helium installed at first setup (2026-10-07), so terminal fell back to foot and browser to chromium until installed |
 
 The laptop's `DVI-I-1` is a DisplayLink output over `evdi`. It disappears when the dock is
 unplugged, and its card number shifts between boots because `evdi` is a platform device — which

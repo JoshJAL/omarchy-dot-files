@@ -58,6 +58,7 @@ dotfiles checkout -- .config/hypr/monitors.lua
 | Browser launch flags | `~/.config/*-flags.conf` |
 | git, mise, starship | `~/.config/git/`, `~/.config/mise/`, `~/.config/starship.toml` |
 | Personal scripts | `~/.local/bin/` (selected files — see below) |
+| Windows 11 VM with GPU passthrough (work laptop; shareable bundle) | `~/win11-gpu-vm/` — see below |
 
 **Screensaver randomization is load-bearing.** Omarchy does *not* rotate the
 screensaver artwork on its own: the packaged `omarchy-launch-screensaver` renders
@@ -114,9 +115,31 @@ detect their hardware at config-read time and branch:
   An unknown machine gets no rules and Hyprland auto-arranges.
 - `hypr/hyprland.lua` — the `AQ_DRM_DEVICES` ordering and the `LIBVA_DRIVER_NAME=iHD`
   VA-API pin are work-laptop-only. Everywhere else they no-op; on the desktop
-  Omarchy's own `default/hypr/nvidia.lua` takes over.
+  Omarchy's own `default/hypr/nvidia.lua` takes over. Also laptop-only: while
+  `~/.config/hypr/gpu-vm-mode` exists, the 4070 is left out of `AQ_DRM_DEVICES` and
+  NVIDIA's EGL/Vulkan/GLX are hidden, so the GPU can be handed to the Windows VM.
 
 Add a machine by adding a branch, not by committing a divergent file.
+
+### Windows 11 VM with GPU passthrough (`win11-gpu-vm/`)
+
+The work laptop runs a libvirt `win11` VM with the RTX 4070 passed through and Looking Glass
+for display (SolidWorks needs a real GPU), plus USB auto-attach for security keys and drives.
+Most of it lives outside `$HOME` (`/usr/local/bin`, `/etc/udev`, `/etc/libvirt/hooks/qemu.d`,
+`/etc/tmpfiles.d`), so it is tracked as one self-contained bundle in `~/win11-gpu-vm/` and
+installed from there:
+
+- **Source of truth.** Every machine-specific value lives in `/etc/win11-vm.conf`, which is *not*
+  tracked (`win11-gpu-vm/detect.sh` regenerates a proposal). `win11-gpu-vm/install.sh` installs
+  the system and user files from the bundle; `install.sh --check` reports drift and writes nothing.
+  Edit the bundle, never the installed copies.
+- **Shareable.** The folder is written for someone else's Omarchy machine: its own `README.md`,
+  a `FOR_AGENT.md` runbook an agent can follow, and `LESSONS.md` (every failure it took to get
+  here). Link: <https://github.com/JoshJAL/omarchy-dot-files/tree/main/win11-gpu-vm>.
+- **Not bundled:** the Windows disk image, any `virsh dumpxml` (UUID/MAC/TPM paths), and
+  `/etc/udev/rules.d/92-via-keyboard.rules` — that is the keyboard's own VIA rule. It is
+  mentioned only because a two-line split of it once applied `GROUP="input"` to every device and
+  broke `/dev/kvm`.
 
 ## What's intentionally NOT tracked
 

@@ -179,6 +179,11 @@ Step 5 is the authority; this is the checklist form:
    (or quit and reopen it) before judging. Cost of that setting: no `ssh-env`, so a remote host
    without an `xterm-ghostty` terminfo entry reports `unknown terminal type`; fix it with
    `alias ssh='TERM=xterm-256color ssh'` in `.bashrc`, not by turning integration back on.
+5. **Windows 11 GPU VM — work laptop only.** Only if `/etc/win11-vm.conf` exists (it marks a
+   machine that runs the VM), run `~/win11-gpu-vm/install.sh --check`. It writes nothing and exits
+   non-zero on drift between the bundle and the installed system files. Report drift; do not run
+   `install.sh` to fix it without asking — it replaces root-owned files (via `pkexec`) and can
+   restart `libvirtd`. Never run `winvm-gpu on|off`: a GPU handover costs the user a log out.
 
 ---
 
