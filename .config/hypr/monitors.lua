@@ -33,7 +33,7 @@ if machine.is(machine.LAPTOP) then
   -- (transform = 3), so it occupies 1080x1920 in layout space. Origin is 0x0.
   --
   --   DVI-I-1   top-left (3440, 0)    1080x1920, right of the ultrawide
-  --   HDMI-A-1  top-left (0, 480)     3440x1440; y = 1920 - 1440 puts its bottom
+  --   ultrawide top-left (0, 480)     3440x1440; y = 1920 - 1440 puts its bottom
   --                                   edge level with the portrait panel's
   --   eDP-1     top-left (2480, 1920) 1920x1200; flush under both bottom edges and
   --                                   centred on the x = 3440 seam (3440 - 1920/2)
@@ -42,8 +42,12 @@ if machine.is(machine.LAPTOP) then
   -- whenever the dock re-enumerates (it became DVI-I-2 on 2026-10-07 after a
   -- port swap, which silently dropped the rotation). Match the panel by EDID
   -- description instead of by connector name.
+  --
+  -- The ultrawide is matched by EDID too. It moved from HDMI-A-1 (wired to the
+  -- RTX 4070) to the Thunderbolt port (Intel, DP-n) on 2026-10-19 so it stays on
+  -- the host while the 4070 is passed through to the win11 VM (win11-gpu-vm/).
   hl.monitor({ output = "desc:LG Electronics LG IPS FULLHD 0x0003B989", mode = "1920x1080@60.0", position = "3440x0", scale = 1.0, vrr = 0, transform = 3 })
-  hl.monitor({ output = "HDMI-A-1", mode = "3440x1440@59.97", position = "0x480",     scale = 1.0, vrr = 0 })
+  hl.monitor({ output = "desc:LG Electronics LG ULTRAWIDE 0x0000AB64", mode = "3440x1440@59.97", position = "0x480", scale = 1.0, vrr = 0 })
   hl.monitor({ output = "eDP-1",    mode = "1920x1200@165.0", position = "2480x1920", scale = internal_scale, vrr = 0 })
 elseif machine.is(machine.DESKTOP) then
   hl.env("GDK_SCALE", "1")
