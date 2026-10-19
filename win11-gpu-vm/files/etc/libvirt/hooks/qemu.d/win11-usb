@@ -1,0 +1,9 @@
+#!/bin/bash
+# libvirt qemu hook: once the VM has started, attach USB keys/drives that were already plugged in.
+# Must not call virsh synchronously here (libvirtd waits on this hook), so defer via systemd-run.
+# Lives in qemu.d/ so it coexists with any other hooks; libvirtd only picks it up after a restart.
+. /etc/win11-vm.conf 2>/dev/null || exit 0
+if [[ $1 == "$VM_NAME" && $2 == started ]]; then
+  /usr/bin/systemd-run --no-block --on-active=5 /usr/local/bin/winvm-usb sync >/dev/null 2>&1
+fi
+exit 0

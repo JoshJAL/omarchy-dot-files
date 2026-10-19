@@ -1,0 +1,50 @@
+#!/bin/bash
+# Launcher for the libvirt GPU-passthrough VM (settings in /etc/win11-vm.conf), shown through Looking Glass.
+#   win11-vm [start]   hand over the GPU if needed, boot Windows, open Looking Glass
+#   win11-vm shutdown  shut Windows down cleanly
+#   win11-vm gpu-off   shut Windows down and return the GPU to Linux
+set -u
+notify() { notify-send -a "Windows 11" "Windows 11" "$1"; }
+. /etc/win11-vm.conf || { notify "/etc/win11-vm.conf is missing. Run install.sh from the win11-gpu-vm bundle."; exit 1; }
+VM=$VM_NAME
+URI=qemu:///system
+GPU=${GPU_PCI%% *}
+FLAG=$HOME/.config/hypr/gpu-vm-mode
+
+state() { virsh -c $URI domstate $VM 2>/dev/null; }
+gpu_driver() { basename "$(readlink /sys/bus/pci/devices/$GPU/driver 2>/dev/null)" 2>/dev/null; }
+
+shutdown_vm() {
+  [[ $(state) == running ]] || return 0
+  notify "Shutting Windows down…"
+  virsh -c $URI shutdown $VM --mode agent >/dev/null 2>&1 || virsh -c $URI shutdown $VM >/dev/null 2>&1
+  for _ in $(seq 1 90); do [[ $(state) == running ]] || return 0; sleep 2; done
+  notify "Windows did not shut down within 3 minutes. Close open apps in Windows and try again."
+  return 1
+}
+
+case ${1:-start} in
+  start)
+    if [[ $(state) != running ]]; then
+      if [[ $(gpu_driver) != vfio-pci ]]; then
+        if [[ ! -e $FLAG ]]; then
+          out=$(winvm-gpu on 2>&1) || { notify "GPU handover failed: $out"; exit 1; }
+          notify "Ready for the GPU handover. Log out and back in, then open Windows 11 (GPU) again."
+          exit 0
+        fi
+        out=$(winvm-gpu on 2>&1) || { notify "Could not hand the GPU to Windows: $out"; exit 1; }
+      fi
+      out=$(virsh -c $URI start $VM 2>&1) || { notify "Windows failed to start: $out"; exit 1; }
+      notify "Starting Windows…"
+    fi
+    pgrep -x looking-glass-c >/dev/null && exit 0
+    exec looking-glass-client
+    ;;
+  shutdown) shutdown_vm ;;
+  gpu-off)
+    shutdown_vm || exit 1
+    out=$(winvm-gpu off 2>&1) || { notify "Could not return the GPU: $out"; exit 1; }
+    notify "GPU returned to Linux. Log out and back in to use it (and any monitor on it) on the desktop."
+    ;;
+  *) echo "usage: win11-vm [start|shutdown|gpu-off]"; exit 2 ;;
+esac

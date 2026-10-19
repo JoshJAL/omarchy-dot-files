@@ -1,0 +1,37 @@
+# /etc/win11-vm.conf — every machine-specific value for the win11 GPU-passthrough VM.
+#
+# Generate a proposal for your machine with ./detect.sh, review it, then install it with
+#     ./install.sh --conf ./win11-vm.conf
+# Everything in the bundle (winvm-gpu, winvm-usb, the libvirt hook, the launcher, the udev
+# rule) reads this one file. It is sourced by bash as root, so keep it to plain VAR=value lines.
+# The values below are examples from the laptop this was built on.
+
+# libvirt domain name (qemu:///system).
+VM_NAME=win11
+
+# Your login name. The Hyprland flag (~/.config/hypr/gpu-vm-mode), the Looking Glass shared
+# memory file and the USB off-switch (~/.config/windows/usb-auto-off) live under this user.
+VM_USER=example
+
+# Every PCI function in the passthrough GPU's IOMMU group, GPU first (VGA, then its HDMI audio).
+# All of them are handed to vfio-pci together. Find them with: ./detect.sh
+GPU_PCI="0000:01:00.0 0000:01:00.1"
+
+# Name Windows shows for the GPU. The Virtual Display Driver is told to attach to it
+# (guest/install-vdd.ps1 -GpuName).
+GPU_NAME="NVIDIA GeForce RTX 4070 Laptop GPU"
+
+# Guest physical address width in bits, when the IOMMU supports fewer bits than the CPU
+# (Intel: MGAW from /sys/class/iommu/dmar*/intel-iommu/cap). Without it QEMU dies with
+# "vfio: DMA mapping failed". Leave empty when not needed (detect.sh tells you).
+IOMMU_LIMIT=39
+
+# USB vendor IDs (4 hex digits, space separated) whose devices are handed to Windows when
+# plugged in while the VM runs. 1050 = Yubico. Leave empty for none.
+USB_VENDORS="1050"
+
+# 1 = also hand USB mass-storage devices (thumbdrives, external disks) to Windows. 0 = off.
+USB_STORAGE=1
+
+# Looking Glass shared memory size in MiB (power of two). 128 covers up to 4K SDR.
+LG_SHM_MB=128

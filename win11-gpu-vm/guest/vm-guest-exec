@@ -1,0 +1,288 @@
+#!/bin/bash
+# Run PowerShell inside the Windows guest through the QEMU guest agent (qemu-ga), from the host.
+# Nothing is installed in the guest and no network or login is needed; the guest agent
+# (virtio-win-guest-tools) must be running. Needs virsh and python3 on the host.
+set -euo pipefail
+
+CONF=${WIN11_VM_CONF:-/etc/win11-vm.conf}
+URI=qemu:///system
+ENC_LIMIT=30000   # max base64 characters of an -EncodedCommand (CreateProcess caps a command line at 32767)
+CHUNK=32768       # bytes of script sent per guest-file-write
+POLL_SLEEP=1
+
+die() { echo "vm-guest-exec: $*" >&2; exit 125; }
+usage_err() { echo "vm-guest-exec: $*" >&2; echo "Try: vm-guest-exec --help" >&2; exit 2; }
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  vm-guest-exec [options] 'PowerShell command'
+  vm-guest-exec [options] -c 'PowerShell command'
+  vm-guest-exec [options] -f script.ps1 [-- script arguments...]
+
+Runs the command or script in the guest as the guest agent's user (SYSTEM), prints its stdout to
+stdout and its stderr to stderr, and exits with the guest's exit code (see below).
+
+Options:
+  -c, --command CMD    PowerShell command line, run as: powershell.exe -NoProfile -NonInteractive -Command CMD
+  -f, --file FILE      local .ps1 script to run in the guest; everything after "--" is passed to it
+      --vm NAME        libvirt domain (default: VM_NAME from /etc/win11-vm.conf, or $WIN11_VM_CONF)
+      --timeout SECS   give up waiting for the guest process after SECS seconds (default 120)
+      --transfer MODE  how --file reaches the guest (default auto):
+                         encoded  gzip + base64 inside a powershell -EncodedCommand line. No file is
+                                  written in the guest. Limit: 30000 base64 characters on the command
+                                  line, which is roughly an 8 KB gzip, i.e. a script of about 25-40 KB.
+                         file     chunks written to C:\Windows\Temp with guest-file-open/write/close,
+                                  run with -File, then deleted. No practical size limit, but needs the
+                                  guest-file-* guest-agent commands to be allowed.
+                         auto     encoded if it fits, otherwise file
+      --print-json     do not contact the VM; print the guest-agent requests that would be sent
+  -h, --help           this text
+
+Script arguments are PowerShell arguments: "-Name value" binds a parameter, and a value is always
+passed as a plain string. A comma-separated value such as 1920x1200,3440x1440 arrives as one string.
+
+Exit status: the guest process exit code (modulo 256; a non-zero code that would wrap to 0 gives 1,
+and the real code is printed on stderr), 124 on --timeout, 125 on a runner error, 2 on bad usage.
+
+Examples:
+  vm-guest-exec 'Get-PnpDevice -Class Display | Format-Table Status,FriendlyName -AutoSize'
+  vm-guest-exec --timeout 600 --file guest/install-vdd.ps1 -- -GpuName "NVIDIA GeForce RTX 4070 Laptop GPU"
+USAGE
+}
+
+# ---------------------------------------------------------------------------------------------
+# Option parsing
+# ---------------------------------------------------------------------------------------------
+VM= CMD= FILE= TRANSFER=auto TIMEOUT=120 DRY=0
+HAVE_CMD=0 SCRIPT_ARGS=()
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -h|--help) usage; exit 0 ;;
+    --vm) [[ $# -ge 2 ]] || usage_err "--vm needs a name"; VM=$2; shift ;;
+    -c|--command) [[ $# -ge 2 ]] || usage_err "$1 needs a command"; CMD=$2; HAVE_CMD=1; shift ;;
+    -f|--file) [[ $# -ge 2 ]] || usage_err "$1 needs a file"; FILE=$2; shift ;;
+    --timeout) [[ $# -ge 2 ]] || usage_err "--timeout needs seconds"; TIMEOUT=$2; shift ;;
+    --transfer) [[ $# -ge 2 ]] || usage_err "--transfer needs a mode"; TRANSFER=$2; shift ;;
+    --print-json) DRY=1 ;;
+    --) shift; SCRIPT_ARGS=("$@"); break ;;
+    -*) usage_err "unknown option: $1" ;;
+    *) if (( HAVE_CMD )) || [[ -n $FILE ]]; then usage_err "unexpected argument: $1 (script arguments go after --)"; fi
+       CMD=$1; HAVE_CMD=1 ;;
+  esac
+  shift
+done
+
+(( HAVE_CMD )) || [[ -n $FILE ]] || usage_err "give a command or --file"
+(( ! HAVE_CMD )) || [[ -z $FILE ]] || usage_err "use either a command or --file, not both"
+(( ! HAVE_CMD )) || [[ ${#SCRIPT_ARGS[@]} -eq 0 ]] || usage_err "arguments after -- only work with --file"
+[[ $TIMEOUT =~ ^[1-9][0-9]*$ ]] || usage_err "--timeout must be a positive number of seconds"
+[[ $TRANSFER == auto || $TRANSFER == encoded || $TRANSFER == file ]] || usage_err "--transfer: auto, encoded or file"
+if [[ -n $FILE ]]; then
+  [[ -f $FILE && -r $FILE ]] || die "cannot read script: $FILE"
+  [[ -s $FILE ]] || die "script is empty: $FILE"
+fi
+
+if [[ -z $VM ]]; then
+  [[ -r $CONF ]] || die "no VM name: pass --vm NAME, or install $CONF (VM_NAME=...)"
+  # Read VM_NAME without sourcing the file.
+  VM=$(sed -nE 's/^[[:space:]]*VM_NAME=("([^"]*)"|([^"[:space:]#]*)).*/\2\3/p' "$CONF" | tail -n 1)
+  [[ -n $VM ]] || die "VM_NAME not set in $CONF; pass --vm NAME"
+fi
+[[ $VM =~ ^[A-Za-z0-9_.-]+$ ]] || die "VM name: letters, digits, . _ - only"
+
+command -v python3 >/dev/null || die "python3 is required"
+(( DRY )) || command -v virsh >/dev/null || die "virsh is required (libvirt)"
+
+# ---------------------------------------------------------------------------------------------
+# JSON / encoding helpers (python3, like the original runner)
+# ---------------------------------------------------------------------------------------------
+json_exec() {  # json_exec <path> [arg...]  -> guest-exec request
+  python3 -c 'import json,sys; print(json.dumps({"execute":"guest-exec","arguments":{"path":sys.argv[1],"arg":sys.argv[2:],"capture-output":True}}))' "$@"
+}
+
+jret() {  # jret [key...]  : print .return[key]... of the JSON on stdin
+  python3 -c '
+import json, sys
+r = json.load(sys.stdin)["return"]
+for k in sys.argv[1:]:
+    r = r[k]
+print(r)' "$@"
+}
+
+jexited() {  # exit 0 when the guest-exec-status JSON on stdin says the process exited
+  python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin)["return"]["exited"] else 1)'
+}
+
+# Print the guest-exec-status JSON on stdin: stdout/stderr base64-decoded, exit with the guest code.
+emit() {
+  python3 -c '
+import base64, html, json, re, sys
+d = json.load(sys.stdin)["return"]
+def dec(k):
+    return base64.b64decode(d[k]).decode("utf-8", "replace") if d.get(k) else ""
+def clixml(s):  # powershell.exe sometimes wraps stderr as CLIXML; keep just the error text
+    if not s.startswith("#< CLIXML"):
+        return s
+    t = "".join(re.findall(r"<S S=\"Error\">(.*?)</S>", s, re.S))
+    t = t.replace("_x000D__x000A_", "\n").replace("_x000A_", "\n").replace("_x000D_", "")
+    return html.unescape(t)
+out, err = dec("out-data"), clixml(dec("err-data"))
+sys.stdout.write(out); sys.stdout.flush()
+sys.stderr.write(err); sys.stderr.flush()
+code = d.get("exitcode")
+if code is None:
+    code = d.get("signal", 0)
+code = int(code)
+if code != 0:
+    sys.stderr.write("vm-guest-exec: guest exit code %d\n" % code)
+sys.exit((code & 255) or (1 if code else 0))'
+}
+
+# Build the base64 (UTF-16LE) text for powershell -EncodedCommand: a small stub that gunzips the
+# script and runs it as a script block with the arguments. Args that look like -Name stay bare
+# (parameter names); everything else is a single-quoted string.
+encode_script() {  # encode_script <file> [arg...]
+  python3 - "$@" <<'PY'
+import base64, gzip, re, sys
+src = open(sys.argv[1], "rb").read()
+if src.startswith(b"\xef\xbb\xbf"):
+    src = src[3:]
+try:
+    src.decode("utf-8")
+except UnicodeDecodeError:
+    sys.exit("script is not valid UTF-8")
+SQ = "'\u2018\u2019\u201a\u201b"
+def q(s):
+    return "'" + "".join(c * 2 if c in SQ else c for c in s) + "'"
+def render(a):
+    m = re.fullmatch(r"(-[A-Za-z_][A-Za-z0-9_]*:)(.*)", a, re.S)
+    if m:
+        return m.group(1) + q(m.group(2))
+    if re.fullmatch(r"-[A-Za-z_][A-Za-z0-9_]*", a):
+        return a
+    return q(a)
+payload = base64.b64encode(gzip.compress(src, 9, mtime=0)).decode()
+stub = (
+    "$ProgressPreference='SilentlyContinue';"
+    "$b=[Convert]::FromBase64String('%s');"
+    "$m=New-Object IO.MemoryStream(,$b);"
+    "$z=New-Object IO.Compression.GzipStream($m,[IO.Compression.CompressionMode]::Decompress);"
+    "$r=New-Object IO.StreamReader($z,[Text.Encoding]::UTF8);"
+    "$s=$r.ReadToEnd();"
+    "& ([scriptblock]::Create($s)) %s"
+) % (payload, " ".join(render(a) for a in sys.argv[2:]))
+sys.stdout.write(base64.b64encode(stub.encode("utf-16-le")).decode())
+PY
+}
+
+# One line per chunk: "<raw byte count> <base64>". A UTF-8 BOM is added so Windows PowerShell 5.1
+# reads non-ASCII characters in the script correctly.
+chunk_script() {  # chunk_script <file>
+  python3 - "$1" "$CHUNK" <<'PY'
+import base64, sys
+d = open(sys.argv[1], "rb").read()
+if not d.startswith(b"\xef\xbb\xbf"):
+    d = b"\xef\xbb\xbf" + d
+n = int(sys.argv[2])
+for i in range(0, len(d), n):
+    c = d[i:i + n]
+    print(len(c), base64.b64encode(c).decode())
+PY
+}
+
+# ---------------------------------------------------------------------------------------------
+# Guest agent transport. agent <json> leaves the reply in $REPLY. With --print-json it prints the
+# request instead of sending it and fakes a reply.
+# ---------------------------------------------------------------------------------------------
+REPLY=
+agent() {
+  if (( DRY )); then
+    printf '%s\n' "$1"
+    REPLY='{"return":{"pid":1000,"exited":true,"exitcode":0}}'
+    return 0
+  fi
+  REPLY=$(virsh -c "$URI" qemu-agent-command "$VM" "$1") || die "guest agent request failed (is $VM running with qemu-ga up?)"
+}
+note() { if (( DRY )); then printf '# %s\n' "$*"; fi; }
+
+wait_for() {  # wait_for <pid>  -> final status JSON in $REPLY; returns 1 on timeout
+  local pid=$1 deadline=$((SECONDS + TIMEOUT))
+  while :; do
+    agent "{\"execute\":\"guest-exec-status\",\"arguments\":{\"pid\":$pid}}"
+    if jexited <<<"$REPLY"; then return 0; fi
+    (( SECONDS < deadline )) || return 1
+    sleep "$POLL_SLEEP"
+  done
+}
+
+PS=(powershell.exe -NoProfile -NonInteractive)
+PS_ARGS=()   # filled per mode; the guest-exec "arg" list
+CLEANUP=
+
+run_encoded() {
+  local b64
+  b64=$(encode_script "$FILE" ${SCRIPT_ARGS[@]+"${SCRIPT_ARGS[@]}"}) || die "cannot encode $FILE"
+  if (( ${#b64} > ENC_LIMIT )); then
+    return 1
+  fi
+  note "transfer=encoded (${#b64} base64 chars, limit $ENC_LIMIT)"
+  agent "$(json_exec "${PS[0]}" "${PS[@]:1}" -OutputFormat Text -EncodedCommand "$b64")"
+}
+
+run_file() {
+  local gname="vm-guest-exec-$(date +%s)-$RANDOM.ps1" gpath handle line n b64 wr
+  gpath="C:\\Windows\\Temp\\$gname"
+  note "transfer=file ($gpath)"
+  agent "{\"execute\":\"guest-file-open\",\"arguments\":{\"path\":\"C:\\\\Windows\\\\Temp\\\\$gname\",\"mode\":\"wb\"}}"
+  if (( DRY )); then handle=1001; else
+    handle=$(jret <<<"$REPLY") || die "guest-file-open failed (guest-file-* may be blocked in qemu-ga; try --transfer encoded)"
+  fi
+  while read -r n b64 <&3; do
+    agent "{\"execute\":\"guest-file-write\",\"arguments\":{\"handle\":$handle,\"buf-b64\":\"$b64\"}}"
+    if (( ! DRY )); then
+      wr=$(jret count <<<"$REPLY")
+      [[ $wr == "$n" ]] || die "short write to the guest ($wr of $n bytes)"
+    fi
+  done 3< <(chunk_script "$FILE")
+  agent "{\"execute\":\"guest-file-close\",\"arguments\":{\"handle\":$handle}}"
+  CLEANUP=$gpath
+  agent "$(json_exec "${PS[0]}" "${PS[@]:1}" -ExecutionPolicy Bypass -File "$gpath" ${SCRIPT_ARGS[@]+"${SCRIPT_ARGS[@]}"})"
+}
+
+cleanup_guest_file() {
+  [[ -n $CLEANUP ]] || return 0
+  local q=${CLEANUP//\'/\'\'}
+  local req
+  req=$(json_exec "${PS[0]}" "${PS[@]:1}" -Command "Remove-Item -LiteralPath '$q' -Force -ErrorAction SilentlyContinue")
+  if (( DRY )); then agent "$req"; else virsh -c "$URI" qemu-agent-command "$VM" "$req" >/dev/null 2>&1 || true; fi
+}
+
+# ---------------------------------------------------------------------------------------------
+# Start the guest process
+# ---------------------------------------------------------------------------------------------
+if (( HAVE_CMD )); then
+  agent "$(json_exec "${PS[0]}" "${PS[@]:1}" -Command "$CMD")"
+else
+  case $TRANSFER in
+    encoded) run_encoded || die "$FILE is too large for --transfer encoded (limit $ENC_LIMIT base64 characters); use --transfer file" ;;
+    file) run_file ;;
+    auto) run_encoded || run_file ;;
+  esac
+fi
+
+if (( DRY )); then
+  note "then poll guest-exec-status every ${POLL_SLEEP}s for up to ${TIMEOUT}s"
+  [[ -z $CLEANUP ]] || { note "afterwards delete the temp script:"; cleanup_guest_file; }
+  exit 0
+fi
+
+PID=$(jret pid <<<"$REPLY") || die "unexpected guest-exec reply: $REPLY"
+if ! wait_for "$PID"; then
+  echo "vm-guest-exec: timeout after ${TIMEOUT}s; guest process $PID may still be running${CLEANUP:+ (temp script $CLEANUP left in place)}" >&2
+  exit 124
+fi
+rc=0
+emit <<<"$REPLY" || rc=$?
+cleanup_guest_file
+exit "$rc"

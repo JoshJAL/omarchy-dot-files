@@ -38,6 +38,11 @@
 # is relative, so a clone under any username resolves it.
 !/taskbar-sandbox/
 
+# Windows 11 GPU-passthrough VM bundle: scripts + system files installed by its install.sh, and
+# docs meant to be shared. Machine values stay in the untracked /etc/win11-vm.conf; never put a
+# virsh dumpxml (UUID/MAC) or a disk image in here.
+!/win11-gpu-vm/
+
 # --- ~/.config -------------------------------------------------------------
 !/.config/
 /.config/*

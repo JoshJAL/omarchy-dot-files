@@ -1,0 +1,18 @@
+[Desktop Entry]
+Name=Windows 11 (GPU)
+Comment=Windows 11 with the passthrough GPU, shown through Looking Glass
+Exec=uwsm app -- @HOME@/.local/bin/win11-vm start
+Icon=windows
+Terminal=false
+Type=Application
+Categories=System;Emulator;
+Keywords=windows;vm;solidworks;looking glass;
+Actions=shutdown;gpu-off;
+
+[Desktop Action shutdown]
+Name=Shut down Windows
+Exec=uwsm app -- @HOME@/.local/bin/win11-vm shutdown
+
+[Desktop Action gpu-off]
+Name=Shut down and return GPU to Linux
+Exec=uwsm app -- @HOME@/.local/bin/win11-vm gpu-off

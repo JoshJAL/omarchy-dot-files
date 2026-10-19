@@ -1,0 +1,56 @@
+#!/bin/bash
+# Hot-attach/detach host USB devices to the libvirt VM (VM_NAME in /etc/win11-vm.conf) while it runs.
+# Called by /etc/udev/rules.d/99-winvm-usb.rules (USB_VENDORS, plus USB storage when USB_STORAGE=1)
+# and by the libvirt hook /etc/libvirt/hooks/qemu.d/win11-usb after the VM starts.
+# Usage: winvm-usb add <sysfs-path> | del <bus> <dev> | sync
+# Disable auto-attach with: touch ~/.config/windows/usb-auto-off
+. /etc/win11-vm.conf || exit 0
+VM=$VM_NAME
+URI=qemu:///system
+[[ -e $(getent passwd "$VM_USER" | cut -d: -f6)/.config/windows/usb-auto-off ]] && exit 0
+[[ $(virsh -c $URI domstate $VM 2>/dev/null) == running ]] || exit 0
+
+hostdev_xml() {  # hostdev_xml <bus> <dev>
+  printf "<hostdev mode='subsystem' type='usb' managed='yes'><source><address bus='%d' device='%d'/></source></hostdev>\n" "$1" "$2"
+}
+
+attached() {  # attached <bus> <dev>
+  virsh -c $URI dumpxml $VM | grep -q "<address bus='$1' device='$2'/>"
+}
+
+attach() {
+  local d=$1 bus dev x
+  [[ -e $d/busnum ]] || d=${d%/*}   # interface node -> parent device
+  bus=$((10#$(<"$d/busnum"))); dev=$((10#$(<"$d/devnum")))
+  attached $bus $dev && return 0
+  x=$(mktemp); hostdev_xml $bus $dev >"$x"
+  if out=$(virsh -c $URI attach-device $VM "$x" --live 2>&1); then
+    logger -t winvm-usb "attach $bus-$dev $(<"$d/idVendor"):$(<"$d/idProduct")"
+  else
+    logger -t winvm-usb -p user.err "attach $bus-$dev failed: $out"
+  fi
+  rm -f "$x"
+}
+
+detach() {
+  local bus=$((10#$1)) dev=$((10#$2)) x
+  attached $bus $dev || return 0
+  x=$(mktemp); hostdev_xml $bus $dev >"$x"
+  if out=$(virsh -c $URI detach-device $VM "$x" --live 2>&1); then
+    logger -t winvm-usb "detach $bus-$dev"
+  else
+    logger -t winvm-usb -p user.err "detach $bus-$dev failed: $out"
+  fi
+  rm -f "$x"
+}
+
+case $1 in
+  add) attach "/sys$2" ;;
+  del) detach "$2" "$3" ;;
+  sync)
+    for d in /sys/bus/usb/devices/*; do
+      [[ -e $d/idVendor ]] || continue
+      if [[ " $USB_VENDORS " == *" $(<"$d/idVendor") "* ]]; then attach "$d"
+      elif [[ $USB_STORAGE == 1 ]] && grep -qx 08 "$d"/*:*/bInterfaceClass 2>/dev/null; then attach "$d"; fi
+    done ;;
+esac

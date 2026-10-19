@@ -1,0 +1,69 @@
+#!/bin/bash
+# Hand the passthrough GPU (GPU_PCI in /etc/win11-vm.conf) to the libvirt VM, or take it back.
+#   winvm-gpu status | on | off
+# `on` is two-step: first run sets the Hyprland opt-out flag (log out/in), second run binds vfio-pci.
+set -u
+CONF=/etc/win11-vm.conf
+[[ -r $CONF ]] || { echo "winvm-gpu: $CONF is missing (run install.sh from the win11-gpu-vm bundle)"; exit 1; }
+. "$CONF"
+FLAG=$(getent passwd "$VM_USER" | cut -d: -f6)/.config/hypr/gpu-vm-mode
+read -ra DEVS <<<"$GPU_PCI"
+GPU=${DEVS[0]}
+VM=$VM_NAME
+
+drv() { basename "$(readlink "/sys/bus/pci/devices/$1/driver" 2>/dev/null)" 2>/dev/null; }
+all_vfio() { local d; for d in "${DEVS[@]}"; do [[ $(drv $d) == vfio-pci ]] || return 1; done; }
+drivers() { local d; for d in "${DEVS[@]}"; do printf '%s ' "$(drv $d)"; done; }
+vm_running() { [[ $(virsh -c qemu:///system domstate $VM 2>/dev/null) == running ]]; }
+
+holders() {
+  local cards p f t
+  cards=$(readlink -e /dev/dri/by-path/pci-$GPU-card /dev/dri/by-path/pci-$GPU-render 2>/dev/null)
+  for p in /proc/[0-9]*; do
+    [[ ${p#/proc/} == $$ ]] && continue
+    for f in "$p"/fd/*; do
+      t=$(readlink "$f" 2>/dev/null) || continue
+      if [[ $t == /dev/nvidia* ]] || grep -qxF "$t" <<<"$cards"; then
+        echo "$(basename "$p") $(cat "$p/comm" 2>/dev/null) $t"; break
+      fi
+    done
+  done
+}
+
+case ${1:-status} in
+  status)
+    echo "gpu driver: $(drv $GPU)$(for d in "${DEVS[@]:1}"; do printf '   %s: %s' "${d#0000:}" "$(drv $d)"; done)"
+    echo "hypr flag:  $([[ -e $FLAG ]] && echo set || echo unset)"
+    echo "vm running: $(vm_running && echo yes || echo no)"
+    h=$(holders); [[ -n $h ]] && { echo "host users of the gpu:"; echo "$h" | sed 's/^/  /'; }
+    ;;
+  on)
+    [[ $EUID == 0 ]] || exec pkexec "$0" "$@"
+    all_vfio && { echo "GPU is already reserved for Windows."; exit 0; }
+    if [[ ! -e $FLAG ]]; then
+      install -m 0644 -o "$VM_USER" -g "$(id -gn "$VM_USER")" /dev/null "$FLAG"
+      echo "Flag set. Log out and back in (Hyprland will start without the GPU), then run: winvm-gpu on"
+      exit 0
+    fi
+    h=$(holders)
+    if [[ -n $h ]]; then echo "Still in use on the host:"; echo "$h" | sed 's/^/  /'; echo "Log out/in again, or close these."; exit 1; fi
+    modprobe vfio-pci || exit 1
+    for d in "${DEVS[@]}"; do
+      echo vfio-pci >/sys/bus/pci/devices/$d/driver_override
+      [[ -e /sys/bus/pci/devices/$d/driver ]] && echo $d >/sys/bus/pci/devices/$d/driver/unbind
+      echo $d >/sys/bus/pci/drivers_probe
+    done
+    all_vfio || { echo "bind failed: $(drivers)"; exit 1; }
+    echo "GPU is now reserved for Windows." ;;
+  off)
+    [[ $EUID == 0 ]] || exec pkexec "$0" "$@"
+    vm_running && { echo "Shut Windows down first."; exit 1; }
+    for d in "${DEVS[@]}"; do
+      echo >/sys/bus/pci/devices/$d/driver_override
+      [[ $(drv $d) == vfio-pci ]] && echo $d >/sys/bus/pci/drivers/vfio-pci/unbind
+      echo $d >/sys/bus/pci/drivers_probe
+    done
+    rm -f "$FLAG"
+    echo "GPU returned to Linux ($(drv $GPU)). Log out/in to use it on the desktop again." ;;
+  *) echo "usage: winvm-gpu status|on|off"; exit 2 ;;
+esac
