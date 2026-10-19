@@ -51,7 +51,14 @@ if on_work_laptop then
   -- `winvm-gpu on` creates this flag so the 4070 is left unopened by the
   -- compositor and can be handed to the Windows VM. `winvm-gpu off` removes it.
   local gpu_for_vm = io.open(os.getenv("HOME") .. "/.config/hypr/gpu-vm-mode", "r")
-  if gpu_for_vm then gpu_for_vm:close() end
+  if gpu_for_vm then
+    gpu_for_vm:close()
+    -- Keep the NVIDIA EGL/Vulkan/GLX userspace from loading in Hyprland and its
+    -- children. Merely enumerating GPUs opens /dev/nvidia0 and blocks the unbind.
+    hl.env("__EGL_VENDOR_LIBRARY_FILENAMES", "/usr/share/glvnd/egl_vendor.d/50_mesa.json")
+    hl.env("VK_DRIVER_FILES", "/usr/share/vulkan/icd.d/intel_icd.json")
+    hl.env("__GLX_VENDOR_LIBRARY_NAME", "mesa")
+  end
   for _, by_path in ipairs({
     "/dev/dri/by-path/pci-0000:00:02.0-card",
     "/dev/dri/by-path/pci-0000:01:00.0-card",
