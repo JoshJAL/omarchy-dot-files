@@ -48,11 +48,16 @@ if on_work_laptop then
   -- so unguarded, this block would silently pin the desktop to one card and
   -- hide its AMD iGPU from aquamarine.
   local drm_cards = {}
+  -- `winvm-gpu on` creates this flag so the 4070 is left unopened by the
+  -- compositor and can be handed to the Windows VM. `winvm-gpu off` removes it.
+  local gpu_for_vm = io.open(os.getenv("HOME") .. "/.config/hypr/gpu-vm-mode", "r")
+  if gpu_for_vm then gpu_for_vm:close() end
   for _, by_path in ipairs({
     "/dev/dri/by-path/pci-0000:00:02.0-card",
     "/dev/dri/by-path/pci-0000:01:00.0-card",
     "/dev/dri/by-path/platform-evdi.0-card",
   }) do
+    if gpu_for_vm and by_path:find("pci-0000:01:00.0", 1, true) then goto continue end
     local probe = io.popen("readlink -e -- '" .. by_path .. "' 2>/dev/null")
     if probe then
       local node = probe:read("*l")
@@ -61,6 +66,7 @@ if on_work_laptop then
         drm_cards[#drm_cards + 1] = node
       end
     end
+    ::continue::
   end
 
   -- Takes effect on a full Hyprland restart, not `hyprctl reload`. If a display
