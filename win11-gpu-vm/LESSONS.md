@@ -204,7 +204,10 @@ Looking Glass B7). Your hardware may fail in other ways.
 - **Hyprland grabs a GPU that appears while it runs.** `AQ_DRM_DEVICES` only filters the startup scan;
   aquamarine's udev hotplug path opens any new DRM card. Giving the GPU back to `nvidia` when the VM
   stopped made Hyprland open `/dev/dri/card2` within a second, and the next VM start then needed a log
-  out/in. So the hook leaves the GPU on vfio-pci after the VM stops; only `win11-vm gpu-off` returns it.
+  out/in. Fix: `72-winvm-gpu-seat.rules` (after systemd's `71-seat.rules`) removes the `seat` and
+  `master-of-seat` tags from that card while the flag is set. logind then keeps it off `seat0` and
+  Hyprland never gets it. Reserving the GPU at boot instead was tried and dropped: it kept the GPU from
+  Linux all the time.
 - **Closing the Looking Glass window used to leave Windows running.** It kept the USB devices, the GPU and
   its RAM. The launcher now shuts Windows down (ACPI) when the window closes, and closes the window when
   Windows stops.

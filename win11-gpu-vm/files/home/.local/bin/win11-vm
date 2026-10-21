@@ -5,7 +5,7 @@
 #   win11-vm gpu-off   shut Windows down and return the GPU to Linux
 # Windows behaves like an app: closing the Looking Glass window shuts Windows down (ACPI, so Windows
 # can still ask about unsaved work), and shutting Windows down from inside closes the window. Once
-# QEMU exits, every USB device it held goes back to Linux. The GPU stays on vfio-pci (see qemu.d/win11-gpu).
+# QEMU exits, every USB device it held goes back to Linux, and the libvirt hook gives the GPU back too.
 set -u
 notify() { notify-send -a "Windows 11" "Windows 11" "$1"; }
 . /etc/win11-vm.conf || { notify "/etc/win11-vm.conf is missing. Run install.sh from the win11-gpu-vm bundle."; exit 1; }

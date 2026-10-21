@@ -1,12 +1,13 @@
 #!/bin/bash
-# libvirt qemu hook: give the GPU to vfio-pci just before the VM starts. It stays there after the VM stops:
-# Hyprland grabs any GPU that appears while it runs (AQ_DRM_DEVICES only filters at startup), so handing it
-# back to the Linux driver would make the next start need a log out/in. `winvm-gpu off` returns it for good.
+# libvirt qemu hook: give the GPU to vfio-pci just before the VM starts, and back to Linux after it stops.
+# Hyprland would grab the returned GPU (AQ_DRM_DEVICES only filters at startup); the udev rule
+# 72-winvm-gpu-seat.rules keeps it off the seat so logind refuses to hand it over.
 # Must not call virsh: libvirtd waits for hooks to exit. A non-zero exit at prepare/begin aborts the start.
 . /etc/win11-vm.conf 2>/dev/null || exit 0
 [[ $1 == "$VM_NAME" ]] || exit 0
 case $2/$3 in
   prepare/begin) out=$(/usr/local/bin/winvm-gpu hook-prepare 2>&1); rc=$?
                  logger -t winvm-gpu "vm start: $out"; [[ $rc == 0 ]] || { echo "$out" >&2; exit 1; } ;;
+  release/end)   logger -t winvm-gpu "vm stop: $(/usr/local/bin/winvm-gpu hook-release 2>&1)" ;;
 esac
 exit 0
