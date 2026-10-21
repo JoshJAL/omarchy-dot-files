@@ -9,8 +9,8 @@ create the VM and wire up the GPU handover, so only the Windows-side clicks are 
 
 - A Windows 11 VM: UEFI with Secure Boot, TPM 2.0, virtio disk and network, on `qemu:///system`.
 - Your discrete GPU passed through to Windows. After a one-time setup (`winvm-gpu on` plus one log out/in),
-  a libvirt hook hands it to Windows when the VM starts, with no password prompts. It stays reserved for
-  Windows after the VM stops (idle, powered down); `win11-vm gpu-off` plus a log out/in gives it back.
+  it is reserved for Windows at every boot, before the login screen, so starting Windows never needs a
+  password prompt or a log out/in. It stays reserved while Windows is off; `win11-vm gpu-off` gives it back.
 - Windows behaves like an app: closing the Looking Glass window shuts Windows down; USB devices return to Linux.
 - Looking Glass B7: Windows on the GPU, displayed in a normal window.
 - A launcher ("Windows 11 (GPU)" in the app menu, or `win11-vm`) that does the handover, boots Windows
@@ -91,6 +91,7 @@ You still do the clicks inside Windows.
 | `files/usr/local/bin/winvm-gpu` | hands the GPU to Windows or back (`status`, `holders`, `on`, `off`) |
 | `files/usr/local/bin/winvm-usb` | attaches and detaches USB devices to the running VM |
 | `files/etc/libvirt/hooks/qemu.d/win11-usb` | libvirt hook: attaches already-plugged-in USB devices at VM start |
+| `files/etc/systemd/system/winvm-gpu-boot.service` | reserves the GPU for Windows at boot, before the login screen (only when the Hyprland flag is set) |
 | `files/etc/libvirt/hooks/qemu.d/win11-gpu` | libvirt hook: binds the GPU to vfio-pci at VM start (it stays there after the VM stops) |
 | `files/etc/tmpfiles.d/10-looking-glass.conf.in` | creates the Looking Glass shared-memory file at boot |
 | `files/home/.local/bin/win11-vm` | the launcher |
