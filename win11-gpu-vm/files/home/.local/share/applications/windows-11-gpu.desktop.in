@@ -14,5 +14,5 @@ Name=Shut down Windows
 Exec=uwsm app -- @HOME@/.local/bin/win11-vm shutdown
 
 [Desktop Action gpu-off]
-Name=Shut down and return GPU to Linux
+Name=Shut down and give the GPU to the desktop
 Exec=uwsm app -- @HOME@/.local/bin/win11-vm gpu-off

@@ -136,6 +136,12 @@ installed from there:
 - **Shareable.** The folder is written for someone else's Omarchy machine: its own `README.md`,
   a `FOR_AGENT.md` runbook an agent can follow, and `LESSONS.md` (every failure it took to get
   here). Link: <https://github.com/JoshJAL/omarchy-dot-files/tree/main/win11-gpu-vm>.
+- **Day to day** it behaves like an app. The RTX 4070 belongs to Linux whenever Windows is off
+  (`nvidia-smi`, btop, CUDA see it). Opening "Windows 11 (GPU)" moves it to Windows. Closing the
+  Looking Glass window shuts Windows down, and the GPU and USB devices come back. There is no password
+  prompt and no log out/in: the libvirt hook does the switch, and a generated udev rule keeps the
+  card off the login seat so Hyprland never opens it. A program still using the GPU blocks the
+  start, and the launcher names it.
 - **Not bundled:** the Windows disk image, any `virsh dumpxml` (UUID/MAC/TPM paths), and
   `/etc/udev/rules.d/92-via-keyboard.rules` — that is the keyboard's own VIA rule. It is
   mentioned only because a two-line split of it once applied `GROUP="input"` to every device and

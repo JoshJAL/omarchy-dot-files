@@ -239,6 +239,11 @@ Do each item and report which pass:
    shows an `attach` (from the libvirt hook) and Windows sees it.
 6. `./install.sh --check` prints `No drift.`
 7. Windows has network (the human opens a web page, or `guest/vm-guest-exec 'Test-NetConnection 1.1.1.1 -Port 443'`).
+8. Switching back: the human closes the Looking Glass window and gets "Windows is off." Then
+   `winvm-gpu status` shows the Linux driver (e.g. `nvidia`), `vm running: no` and **no** host users;
+   if Hyprland is listed, the udev seat rule did not apply (`udevadm info /dev/dri/cardN | grep CURRENT_TAGS`
+   must not contain `seat`). `journalctl -t winvm-gpu -n 5` shows `vm stop: GPU returned to Linux`.
+9. The human opens **Windows 11 (GPU)** again: it starts with no password prompt and no log out/in.
 
 If one fails, find the symptom in `LESSONS.md`.
 
@@ -250,7 +255,7 @@ If one fails, find the symptom in `LESSONS.md`.
 |---|---|
 | `win11-vm start` (default; the app menu entry) | hand over the GPU if needed, boot Windows, open Looking Glass. Closing the Looking Glass window shuts Windows down (ACPI, so Windows can still stop for unsaved work); shutting Windows down from inside closes the window. USB devices return to Linux when Windows is off |
 | `win11-vm shutdown` | clean (ACPI) shutdown of Windows |
-| `win11-vm gpu-off` | shut down Windows and give the GPU back to Linux (log out/in afterwards) |
+| `win11-vm gpu-off` | shut down Windows and leave VM mode, so the desktop (Hyprland, monitors wired to the GPU) can use the GPU again (log out/in afterwards). Not needed day to day: the GPU already belongs to Linux whenever Windows is off |
 | `winvm-gpu status` | driver of the GPU, flag, whether the VM runs, host programs still using the GPU |
 | `winvm-gpu holders` | programs still using the GPU (they block the VM start; close them) |
 | `winvm-gpu on` / `winvm-gpu off` | one-time setup (sets the Hyprland flag, then binds) / stop using the GPU for the VM (`off` needs the VM shut down, removes the flag, needs a log out/in for the desktop to use the GPU) |

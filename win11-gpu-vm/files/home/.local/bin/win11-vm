@@ -2,7 +2,7 @@
 # Launcher for the libvirt GPU-passthrough VM (settings in /etc/win11-vm.conf), shown through Looking Glass.
 #   win11-vm [start]   hand over the GPU if needed, boot Windows, open Looking Glass
 #   win11-vm shutdown  shut Windows down cleanly
-#   win11-vm gpu-off   shut Windows down and return the GPU to Linux
+#   win11-vm gpu-off   shut Windows down and leave VM mode, so the desktop itself can use the GPU again
 # Windows behaves like an app: closing the Looking Glass window shuts Windows down (ACPI, so Windows
 # can still ask about unsaved work), and shutting Windows down from inside closes the window. Once
 # QEMU exits, every USB device it held goes back to Linux, and the libvirt hook gives the GPU back too.
@@ -68,7 +68,7 @@ case ${1:-start} in
   gpu-off)
     shutdown_vm || exit 1
     out=$(winvm-gpu off 2>&1) || { notify "Could not return the GPU: $out"; exit 1; }
-    notify "GPU returned to Linux. Log out and back in to use it (and any monitor on it) on the desktop."
+    notify "VM mode is off. Log out and back in so the desktop can use the GPU (and any monitor on it)."
     ;;
   *) echo "usage: win11-vm [start|shutdown|gpu-off]"; exit 2 ;;
 esac

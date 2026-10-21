@@ -19,6 +19,8 @@
 -- nothing until you LOG OUT AND BACK IN (`hyprctl reload` is not enough).
 --   winvm-gpu on   1st run: creates the flag.  Log out/in.  2nd run: binds the GPU to vfio-pci.
 --   winvm-gpu off  removes the flag.  Log out/in to give the GPU back to the desktop.
+-- While the flag is set, the GPU still belongs to Linux whenever Windows is off (CUDA, nvidia-smi,
+-- btop work); the libvirt hook moves it to Windows and back. Only the desktop itself never uses it.
 --
 -- If a display fails to come up after you log in, switch to a TTY (Ctrl+Alt+F3), delete this
 -- block (or the flag file, which disables it) and log in again.
