@@ -1,7 +1,10 @@
 #!/bin/bash
 # Hand the passthrough GPU (GPU_PCI in /etc/win11-vm.conf) to the libvirt VM, or take it back.
-#   winvm-gpu status | on | off
+#   winvm-gpu status | holders | on | off
 # `on` is two-step: first run sets the Hyprland opt-out flag (log out/in), second run binds vfio-pci.
+# Once the flag is set, the libvirt hook (qemu.d/win11-gpu) binds vfio-pci when the VM starts, without
+# prompts, and the GPU stays on vfio-pci after it stops (Hyprland would grab it otherwise). `off` gives it
+# back to Linux and clears the flag, for going back to using the GPU on the desktop.
 set -u
 CONF=/etc/win11-vm.conf
 [[ -r $CONF ]] || { echo "winvm-gpu: $CONF is missing (run install.sh from the win11-gpu-vm bundle)"; exit 1; }
@@ -30,6 +33,33 @@ holders() {
   done
 }
 
+# bind_vfio: hand every GPU function to vfio-pci (root). Refuses while host programs hold the GPU.
+bind_vfio() {
+  all_vfio && { echo "GPU is already reserved for Windows."; return 0; }
+  local h d
+  h=$(holders)
+  if [[ -n $h ]]; then echo "Close these first, they are using the GPU:"; echo "$h" | sed 's/^/  /'; return 1; fi
+  modprobe vfio-pci || return 1
+  for d in "${DEVS[@]}"; do
+    echo vfio-pci >/sys/bus/pci/devices/$d/driver_override
+    [[ -e /sys/bus/pci/devices/$d/driver ]] && echo $d >/sys/bus/pci/devices/$d/driver/unbind
+    echo $d >/sys/bus/pci/drivers_probe
+  done
+  all_vfio || { echo "bind failed: $(drivers)"; return 1; }
+  echo "GPU is now reserved for Windows."
+}
+
+# release_host: give every GPU function back to its Linux driver (root). Leaves the Hyprland flag alone.
+release_host() {
+  local d
+  for d in "${DEVS[@]}"; do
+    echo >/sys/bus/pci/devices/$d/driver_override
+    [[ $(drv $d) == vfio-pci ]] && echo $d >/sys/bus/pci/drivers/vfio-pci/unbind
+    echo $d >/sys/bus/pci/drivers_probe
+  done
+  echo "GPU returned to Linux ($(drv $GPU))."
+}
+
 case ${1:-status} in
   status)
     echo "gpu driver: $(drv $GPU)$(for d in "${DEVS[@]:1}"; do printf '   %s: %s' "${d#0000:}" "$(drv $d)"; done)"
@@ -37,33 +67,26 @@ case ${1:-status} in
     echo "vm running: $(vm_running && echo yes || echo no)"
     h=$(holders); [[ -n $h ]] && { echo "host users of the gpu:"; echo "$h" | sed 's/^/  /'; }
     ;;
+  holders)  # no root needed for your own programs; prints "pid name device" per program
+    holders ;;
   on)
     [[ $EUID == 0 ]] || exec pkexec "$0" "$@"
-    all_vfio && { echo "GPU is already reserved for Windows."; exit 0; }
     if [[ ! -e $FLAG ]]; then
       install -m 0644 -o "$VM_USER" -g "$(id -gn "$VM_USER")" /dev/null "$FLAG"
       echo "Flag set. Log out and back in (Hyprland will start without the GPU), then run: winvm-gpu on"
       exit 0
     fi
-    h=$(holders)
-    if [[ -n $h ]]; then echo "Still in use on the host:"; echo "$h" | sed 's/^/  /'; echo "Log out/in again, or close these."; exit 1; fi
-    modprobe vfio-pci || exit 1
-    for d in "${DEVS[@]}"; do
-      echo vfio-pci >/sys/bus/pci/devices/$d/driver_override
-      [[ -e /sys/bus/pci/devices/$d/driver ]] && echo $d >/sys/bus/pci/devices/$d/driver/unbind
-      echo $d >/sys/bus/pci/drivers_probe
-    done
-    all_vfio || { echo "bind failed: $(drivers)"; exit 1; }
-    echo "GPU is now reserved for Windows." ;;
+    bind_vfio || { echo "Log out/in again, or close these."; exit 1; } ;;
   off)
     [[ $EUID == 0 ]] || exec pkexec "$0" "$@"
     vm_running && { echo "Shut Windows down first."; exit 1; }
-    for d in "${DEVS[@]}"; do
-      echo >/sys/bus/pci/devices/$d/driver_override
-      [[ $(drv $d) == vfio-pci ]] && echo $d >/sys/bus/pci/drivers/vfio-pci/unbind
-      echo $d >/sys/bus/pci/drivers_probe
-    done
+    release_host >/dev/null
     rm -f "$FLAG"
     echo "GPU returned to Linux ($(drv $GPU)). Log out/in to use it on the desktop again." ;;
-  *) echo "usage: winvm-gpu status|on|off"; exit 2 ;;
+  # Called by /etc/libvirt/hooks/qemu.d/win11-gpu as root. Must not call virsh (libvirtd waits on hooks).
+  hook-prepare)
+    [[ $EUID == 0 ]] || { echo "hook-prepare must run as root"; exit 1; }
+    [[ -e $FLAG ]] || { echo "Hyprland is not in gpu-vm-mode: run winvm-gpu on (then log out and back in) first."; exit 1; }
+    bind_vfio ;;
+  *) echo "usage: winvm-gpu status|holders|on|off"; exit 2 ;;
 esac
