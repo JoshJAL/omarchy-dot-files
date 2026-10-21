@@ -255,12 +255,11 @@ If one fails, find the symptom in `LESSONS.md`.
 | `winvm-gpu holders` | programs still using the GPU (they block the VM start; close them) |
 | `winvm-gpu on` / `winvm-gpu off` | one-time setup (sets the Hyprland flag, then binds) / stop using the GPU for the VM (`off` needs the VM shut down, removes the flag, needs a log out/in for the desktop to use the GPU) |
 
-With the flag set, `winvm-gpu-boot.service` binds the GPU to vfio-pci at every boot, before the login
-screen, so no desktop session opens it and no log out/in is ever needed again. The hook `qemu.d/win11-gpu`
-also binds it at VM start if it is not already (log for both: `journalctl -t winvm-gpu`). It does **not** return the GPU when the VM stops: Hyprland takes any GPU that
-appears while it runs, so the next start would need a log out/in (see `LESSONS.md`). While the GPU is on
-the Linux driver, a program holding it (btop's GPU panel, nvidia-smi, CUDA work) makes the start fail; the
-launcher names it.
+With the flag set, the hook `qemu.d/win11-gpu` binds the GPU to vfio-pci at every VM start and returns it
+to the Linux driver at every stop (log: `journalctl -t winvm-gpu`). Hyprland takes any GPU that appears
+while it runs, so the generated udev rule `72-winvm-gpu-seat.rules` keeps the GPU off the login seat and
+logind refuses to hand it over (see `LESSONS.md`). A program holding the GPU (btop's GPU panel,
+nvidia-smi, CUDA work) makes the start fail; the launcher names it.
 
 **USB off switch:** `touch ~/.config/windows/usb-auto-off` stops automatic attachment of USB devices;
 delete the file to turn it back on.
@@ -274,10 +273,9 @@ devices, so after changing them check `./enable-gpu.sh --dry-run`.
 **Uninstall** (manual; every item needs the human's approval, the system ones need root):
 
 - `winvm-gpu off` first (VM shut down). Then remove the flag-related block from `hyprland.lua` if wanted.
-- `systemctl disable winvm-gpu-boot.service`, then remove `/etc/systemd/system/winvm-gpu-boot.service`.
 - System files: `/usr/local/bin/winvm-gpu`, `/usr/local/bin/winvm-usb`,
   `/etc/libvirt/hooks/qemu.d/win11-usb`, `/etc/libvirt/hooks/qemu.d/win11-gpu`, `/etc/tmpfiles.d/10-looking-glass.conf`,
-  `/etc/udev/rules.d/99-winvm-usb.rules`, `/etc/win11-vm.conf`, and the four ufw rules whose comments
+  `/etc/udev/rules.d/99-winvm-usb.rules`, `/etc/udev/rules.d/72-winvm-gpu-seat.rules`, `/etc/win11-vm.conf`, and the four ufw rules whose comments
   are `libvirt-dhcp`, `libvirt-dns`, `libvirt-vm-out`, `libvirt-vm-in` (`ufw status numbered`, then
   `ufw delete <n>`). Then `udevadm control --reload` and restart libvirtd.
 - User files: `~/.local/bin/win11-vm`, `~/.local/share/applications/windows-11-gpu.desktop`,

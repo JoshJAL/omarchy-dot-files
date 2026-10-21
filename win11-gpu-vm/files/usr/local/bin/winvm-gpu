@@ -2,9 +2,10 @@
 # Hand the passthrough GPU (GPU_PCI in /etc/win11-vm.conf) to the libvirt VM, or take it back.
 #   winvm-gpu status | holders | on | off
 # `on` is two-step: first run sets the Hyprland opt-out flag (log out/in), second run binds vfio-pci.
-# Once the flag is set, winvm-gpu-boot.service binds vfio-pci at every boot before the login screen, and
-# the libvirt hook (qemu.d/win11-gpu) binds it at VM start if it is not already. It stays on vfio-pci after
-# the VM stops (Hyprland would grab it otherwise). `off` gives it back to Linux and clears the flag.
+# Once the flag is set, the libvirt hook (qemu.d/win11-gpu) does the rest without prompts: it binds
+# vfio-pci when the VM starts and gives the GPU back to Linux when the VM stops. The udev rule
+# 72-winvm-gpu-seat.rules keeps the GPU off the seat, so Hyprland never takes it in between. `off` also
+# clears the flag, for going back to using the GPU on the desktop.
 set -u
 CONF=/etc/win11-vm.conf
 [[ -r $CONF ]] || { echo "winvm-gpu: $CONF is missing (run install.sh from the win11-gpu-vm bundle)"; exit 1; }
@@ -88,10 +89,8 @@ case ${1:-status} in
     [[ $EUID == 0 ]] || { echo "hook-prepare must run as root"; exit 1; }
     [[ -e $FLAG ]] || { echo "Hyprland is not in gpu-vm-mode: run winvm-gpu on (then log out and back in) first."; exit 1; }
     bind_vfio ;;
-  # Called by winvm-gpu-boot.service before the login screen, so no session ever opens the GPU.
-  boot)
-    [[ $EUID == 0 ]] || { echo "boot must run as root"; exit 1; }
-    [[ -e $FLAG ]] || { echo "Hyprland is not in gpu-vm-mode; leaving the GPU to Linux."; exit 0; }
-    bind_vfio ;;
+  hook-release)
+    [[ $EUID == 0 ]] || { echo "hook-release must run as root"; exit 1; }
+    release_host ;;
   *) echo "usage: winvm-gpu status|holders|on|off"; exit 2 ;;
 esac
