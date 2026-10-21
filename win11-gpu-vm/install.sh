@@ -49,6 +49,8 @@ if [[ ${1:-} == __root ]]; then
 
   systemd-tmpfiles --create /etc/tmpfiles.d/10-looking-glass.conf
   if [[ " ${changed[*]} " == *" /etc/udev/rules.d/99-winvm-usb.rules "* ]]; then udevadm control --reload; fi
+  if [[ " ${changed[*]} " == *" /etc/systemd/system/"* ]]; then systemctl daemon-reload; fi
+  systemctl is-enabled -q winvm-gpu-boot.service || { systemctl enable winvm-gpu-boot.service; echo "  enabled winvm-gpu-boot.service"; }
 
   if [[ $PKG == 1 ]]; then
     systemctl enable --now libvirtd.service
@@ -120,6 +122,7 @@ put 0755 root/usr/local/bin/winvm-gpu <"$F/usr/local/bin/winvm-gpu"
 put 0755 root/usr/local/bin/winvm-usb <"$F/usr/local/bin/winvm-usb"
 put 0755 root/etc/libvirt/hooks/qemu.d/win11-usb <"$F/etc/libvirt/hooks/qemu.d/win11-usb"
 put 0755 root/etc/libvirt/hooks/qemu.d/win11-gpu <"$F/etc/libvirt/hooks/qemu.d/win11-gpu"
+put 0644 root/etc/systemd/system/winvm-gpu-boot.service <"$F/etc/systemd/system/winvm-gpu-boot.service"
 put 0644 root/etc/tmpfiles.d/10-looking-glass.conf < <(sed "s|@VM_USER@|$VM_USER|g" "$F/etc/tmpfiles.d/10-looking-glass.conf.in")
 put 0644 root$SYS_CONF <"$CONF"
 {
@@ -165,6 +168,7 @@ if [[ $CHECK == 1 ]]; then
     drift=1; echo "LEGACY   /etc/libvirt/hooks/qemu still runs winvm-usb (now done by qemu.d/win11-usb); remove it"
   fi
   while IFS= read -r m; do drift=1; echo "UFW      missing rule: $m"; done < <(ufw_missing)
+  systemctl is-enabled -q winvm-gpu-boot.service || { drift=1; echo "DISABLED winvm-gpu-boot.service"; }
   [[ -e /dev/shm/looking-glass ]] || echo "note     /dev/shm/looking-glass does not exist yet (created by tmpfiles at boot or by install.sh)"
   if [[ $drift == 0 ]]; then echo "No drift."; else echo "Drift found. Run ./install.sh$([[ $CONF != "$SYS_CONF" ]] && echo " --conf $CONF") to bring it in line."; fi
   exit $drift
@@ -192,6 +196,7 @@ done
 need_root=$PACKAGES
 while IFS= read -r -d '' src; do same "$src" "$(target "$src")" || need_root=1; done < <(find "$S/root" -type f -print0)
 [[ -n $(ufw_missing) ]] && need_root=1
+systemctl is-enabled -q winvm-gpu-boot.service || need_root=1
 if [[ $need_root == 1 ]]; then
   echo "System files: approve the password prompt…"
   pkexec "$B/install.sh" __root "$S" "$TS" "$PACKAGES" "$VM_USER"
