@@ -3,6 +3,9 @@
 #   win11-vm [start]   hand over the GPU if needed, boot Windows, open Looking Glass
 #   win11-vm shutdown  shut Windows down cleanly
 #   win11-vm gpu-off   shut Windows down and return the GPU to Linux
+# Windows behaves like an app: closing the Looking Glass window shuts Windows down (ACPI, so Windows
+# can still ask about unsaved work), and shutting Windows down from inside closes the window. Once
+# QEMU exits, every USB device it held goes back to Linux. The GPU stays on vfio-pci (see qemu.d/win11-gpu).
 set -u
 notify() { notify-send -a "Windows 11" "Windows 11" "$1"; }
 . /etc/win11-vm.conf || { notify "/etc/win11-vm.conf is missing. Run install.sh from the win11-gpu-vm bundle."; exit 1; }
@@ -10,35 +13,56 @@ VM=$VM_NAME
 URI=qemu:///system
 GPU=${GPU_PCI%% *}
 FLAG=$HOME/.config/hypr/gpu-vm-mode
+STOPPING=${XDG_RUNTIME_DIR:-/tmp}/win11-vm.stopping
 
 state() { virsh -c $URI domstate $VM 2>/dev/null; }
 gpu_driver() { basename "$(readlink /sys/bus/pci/devices/$GPU/driver 2>/dev/null)" 2>/dev/null; }
 
 shutdown_vm() {
   [[ $(state) == running ]] || return 0
+  echo $$ >"$STOPPING"
   notify "Shutting Windows down…"
-  virsh -c $URI shutdown $VM --mode agent >/dev/null 2>&1 || virsh -c $URI shutdown $VM >/dev/null 2>&1
-  for _ in $(seq 1 90); do [[ $(state) == running ]] || return 0; sleep 2; done
-  notify "Windows did not shut down within 3 minutes. Close open apps in Windows and try again."
+  virsh -c $URI shutdown $VM --mode acpi >/dev/null 2>&1 || virsh -c $URI shutdown $VM >/dev/null 2>&1
+  for _ in $(seq 1 90); do
+    [[ $(state) == running ]] || { rm -f "$STOPPING"; notify "Windows is off."; return 0; }
+    sleep 2
+  done
+  rm -f "$STOPPING"
+  notify "Windows did not shut down within 3 minutes. Open Windows 11 (GPU) again, save or close open apps, and try again."
   return 1
 }
 
 case ${1:-start} in
   start)
+    if [[ -e $STOPPING ]] && kill -0 "$(<"$STOPPING")" 2>/dev/null; then
+      notify "Windows is still shutting down. Open it again in a moment."; exit 0
+    fi
     if [[ $(state) != running ]]; then
+      if [[ ! -e $FLAG ]]; then
+        out=$(winvm-gpu on 2>&1) || { notify "GPU handover failed: $out"; exit 1; }
+        notify "Ready for the GPU handover. Log out and back in, then open Windows 11 (GPU) again."
+        exit 0
+      fi
+      # The libvirt hook (qemu.d/win11-gpu) binds the GPU on start; it refuses while programs use it.
       if [[ $(gpu_driver) != vfio-pci ]]; then
-        if [[ ! -e $FLAG ]]; then
-          out=$(winvm-gpu on 2>&1) || { notify "GPU handover failed: $out"; exit 1; }
-          notify "Ready for the GPU handover. Log out and back in, then open Windows 11 (GPU) again."
-          exit 0
+        h=$(winvm-gpu holders)
+        if [[ -n $h ]]; then
+          notify "Close these first, they are using the GPU: $(awk '{print $2}' <<<"$h" | sort -u | paste -sd, | sed 's/,/, /g')"
+          exit 1
         fi
-        out=$(winvm-gpu on 2>&1) || { notify "Could not hand the GPU to Windows: $out"; exit 1; }
       fi
       out=$(virsh -c $URI start $VM 2>&1) || { notify "Windows failed to start: $out"; exit 1; }
       notify "Starting Windows…"
     fi
     pgrep -x looking-glass-c >/dev/null && exit 0
-    exec looking-glass-client
+    looking-glass-client &
+    lg=$!
+    # Whichever ends first takes the other with it.
+    while kill -0 $lg 2>/dev/null; do
+      [[ $(state) == running ]] || { kill $lg 2>/dev/null; wait $lg; exit 0; }
+      sleep 2
+    done
+    shutdown_vm
     ;;
   shutdown) shutdown_vm ;;
   gpu-off)

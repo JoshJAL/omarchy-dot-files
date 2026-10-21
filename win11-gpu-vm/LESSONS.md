@@ -63,7 +63,7 @@ Looking Glass B7). Your hardware may fail in other ways.
 
 ### 6. The host will not release the GPU
 
-- **Symptom:** `winvm-gpu on` reports `Still in use on the host:` with Hyprland, Xwayland, systemd-logind
+- **Symptom:** `winvm-gpu on` reported `Still in use on the host:` (now: `Close these first, they are using the GPU:`) with Hyprland, Xwayland, systemd-logind
   and the polkit agent holding the GPU's `/dev/dri/cardN` or `/dev/nvidia*`. Unbinding the GPU would hang
   or fail.
 - **Cause:** The compositor opens every GPU it finds, and merely loading the NVIDIA EGL/Vulkan/GLX
@@ -201,3 +201,10 @@ Looking Glass B7). Your hardware may fail in other ways.
   setting but to finish the build with `./enable-gpu.sh --final`, which removes QXL.
 - **A USB stick that has Linux partitions only shows its FAT partition in Windows.** That is not a
   passthrough failure; Windows cannot read ext4/btrfs/LUKS. Check the stick with `lsblk` on the host.
+- **Hyprland grabs a GPU that appears while it runs.** `AQ_DRM_DEVICES` only filters the startup scan;
+  aquamarine's udev hotplug path opens any new DRM card. Giving the GPU back to `nvidia` when the VM
+  stopped made Hyprland open `/dev/dri/card2` within a second, and the next VM start then needed a log
+  out/in. So the hook leaves the GPU on vfio-pci after the VM stops; only `win11-vm gpu-off` returns it.
+- **Closing the Looking Glass window used to leave Windows running.** It kept the USB devices, the GPU and
+  its RAM. The launcher now shuts Windows down (ACPI) when the window closes, and closes the window when
+  Windows stops.

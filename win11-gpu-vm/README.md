@@ -8,7 +8,10 @@ create the VM and wire up the GPU handover, so only the Windows-side clicks are 
 ## What you get
 
 - A Windows 11 VM: UEFI with Secure Boot, TPM 2.0, virtio disk and network, on `qemu:///system`.
-- Your discrete GPU passed through to Windows, with a script (`winvm-gpu`) that hands it over and takes it back.
+- Your discrete GPU passed through to Windows. After a one-time setup (`winvm-gpu on` plus one log out/in),
+  a libvirt hook hands it to Windows when the VM starts, with no password prompts. It stays reserved for
+  Windows after the VM stops (idle, powered down); `win11-vm gpu-off` plus a log out/in gives it back.
+- Windows behaves like an app: closing the Looking Glass window shuts Windows down; USB devices return to Linux.
 - Looking Glass B7: Windows on the GPU, displayed in a normal window.
 - A launcher ("Windows 11 (GPU)" in the app menu, or `win11-vm`) that does the handover, boots Windows
   and opens Looking Glass.
@@ -85,9 +88,10 @@ You still do the clicks inside Windows.
 | `guest/GUEST-STEPS.md` | the Windows-side steps and their troubleshooting |
 | `guest/vm-guest-exec` | runs PowerShell in the guest from the host (QEMU guest agent) |
 | `guest/install-vdd.ps1` | installs the Virtual Display Driver in the guest, bound to the GPU |
-| `files/usr/local/bin/winvm-gpu` | hands the GPU to Windows or back (`status`, `on`, `off`) |
+| `files/usr/local/bin/winvm-gpu` | hands the GPU to Windows or back (`status`, `holders`, `on`, `off`) |
 | `files/usr/local/bin/winvm-usb` | attaches and detaches USB devices to the running VM |
 | `files/etc/libvirt/hooks/qemu.d/win11-usb` | libvirt hook: attaches already-plugged-in USB devices at VM start |
+| `files/etc/libvirt/hooks/qemu.d/win11-gpu` | libvirt hook: binds the GPU to vfio-pci at VM start (it stays there after the VM stops) |
 | `files/etc/tmpfiles.d/10-looking-glass.conf.in` | creates the Looking Glass shared-memory file at boot |
 | `files/home/.local/bin/win11-vm` | the launcher |
 | `files/home/.local/share/applications/windows-11-gpu.desktop.in` | the app-menu entry |

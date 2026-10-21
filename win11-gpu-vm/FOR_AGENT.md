@@ -183,7 +183,7 @@ winvm-gpu status
 ```
 
 The second run unbinds the GPU from the host and binds it to `vfio-pci` ("GPU is now reserved for
-Windows."). If it prints `Still in use on the host:`, something still holds the GPU: check that the
+Windows."). If it prints `Close these first, they are using the GPU:`, something still holds the GPU: check that the
 Hyprland snippet took effect (`env | grep AQ_DRM_DEVICES` in a terminal started after login), log out and in again, or close
 the listed programs. `winvm-gpu status` should show `gpu driver: vfio-pci` for every function.
 
@@ -248,11 +248,18 @@ If one fails, find the symptom in `LESSONS.md`.
 
 | Command | Does |
 |---|---|
-| `win11-vm start` (default; the app menu entry) | hand over the GPU if needed, boot Windows, open Looking Glass |
-| `win11-vm shutdown` | clean shutdown of Windows |
+| `win11-vm start` (default; the app menu entry) | hand over the GPU if needed, boot Windows, open Looking Glass. Closing the Looking Glass window shuts Windows down (ACPI, so Windows can still stop for unsaved work); shutting Windows down from inside closes the window. USB devices return to Linux when Windows is off |
+| `win11-vm shutdown` | clean (ACPI) shutdown of Windows |
 | `win11-vm gpu-off` | shut down Windows and give the GPU back to Linux (log out/in afterwards) |
 | `winvm-gpu status` | driver of the GPU, flag, whether the VM runs, host programs still using the GPU |
-| `winvm-gpu on` / `winvm-gpu off` | hand the GPU to Windows / return it to Linux (`off` needs the VM shut down, removes the flag, needs a log out/in for the desktop to use the GPU) |
+| `winvm-gpu holders` | programs still using the GPU (they block the VM start; close them) |
+| `winvm-gpu on` / `winvm-gpu off` | one-time setup (sets the Hyprland flag, then binds) / stop using the GPU for the VM (`off` needs the VM shut down, removes the flag, needs a log out/in for the desktop to use the GPU) |
+
+With the flag set, the hook `qemu.d/win11-gpu` binds the GPU to vfio-pci at every VM start (log:
+`journalctl -t winvm-gpu`). It does **not** return the GPU when the VM stops: Hyprland takes any GPU that
+appears while it runs, so the next start would need a log out/in (see `LESSONS.md`). While the GPU is on
+the Linux driver, a program holding it (btop's GPU panel, nvidia-smi, CUDA work) makes the start fail; the
+launcher names it.
 
 **USB off switch:** `touch ~/.config/windows/usb-auto-off` stops automatic attachment of USB devices;
 delete the file to turn it back on.
@@ -267,7 +274,7 @@ devices, so after changing them check `./enable-gpu.sh --dry-run`.
 
 - `winvm-gpu off` first (VM shut down). Then remove the flag-related block from `hyprland.lua` if wanted.
 - System files: `/usr/local/bin/winvm-gpu`, `/usr/local/bin/winvm-usb`,
-  `/etc/libvirt/hooks/qemu.d/win11-usb`, `/etc/tmpfiles.d/10-looking-glass.conf`,
+  `/etc/libvirt/hooks/qemu.d/win11-usb`, `/etc/libvirt/hooks/qemu.d/win11-gpu`, `/etc/tmpfiles.d/10-looking-glass.conf`,
   `/etc/udev/rules.d/99-winvm-usb.rules`, `/etc/win11-vm.conf`, and the four ufw rules whose comments
   are `libvirt-dhcp`, `libvirt-dns`, `libvirt-vm-out`, `libvirt-vm-in` (`ufw status numbered`, then
   `ufw delete <n>`). Then `udevadm control --reload` and restart libvirtd.

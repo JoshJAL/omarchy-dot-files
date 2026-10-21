@@ -64,7 +64,7 @@ if [[ ${1:-} == __root ]]; then
   fi
 
   # libvirtd only discovers hook scripts at startup. Restarting it leaves running VMs alone.
-  if [[ " ${changed[*]} " == *" /etc/libvirt/hooks/qemu.d/win11-usb "* ]]; then
+  if [[ " ${changed[*]} " == *" /etc/libvirt/hooks/qemu.d/"* ]]; then
     systemctl try-restart libvirtd.service virtqemud.service
     echo "  restarted libvirtd (new hook)"
   fi
@@ -119,6 +119,7 @@ put() {  # put <mode> <stage-path>  (content on stdin)
 put 0755 root/usr/local/bin/winvm-gpu <"$F/usr/local/bin/winvm-gpu"
 put 0755 root/usr/local/bin/winvm-usb <"$F/usr/local/bin/winvm-usb"
 put 0755 root/etc/libvirt/hooks/qemu.d/win11-usb <"$F/etc/libvirt/hooks/qemu.d/win11-usb"
+put 0755 root/etc/libvirt/hooks/qemu.d/win11-gpu <"$F/etc/libvirt/hooks/qemu.d/win11-gpu"
 put 0644 root/etc/tmpfiles.d/10-looking-glass.conf < <(sed "s|@VM_USER@|$VM_USER|g" "$F/etc/tmpfiles.d/10-looking-glass.conf.in")
 put 0644 root$SYS_CONF <"$CONF"
 {
