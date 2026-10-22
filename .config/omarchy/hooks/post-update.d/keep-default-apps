@@ -161,10 +161,20 @@ fi
 # resolve_desktop, not a bare -f on ~/.local/share/applications: helium.desktop
 # is package-owned and lives in /usr/share/applications here, so the old
 # home-only test skipped this whole block and the browser was never re-asserted.
+#
+# Read and write mimeapps.list directly, not `xdg-settings get/set`. On Hyprland
+# xdg-settings reads ~/.config/hyprland-mimeapps.list first, which Omarchy points
+# http/https at omarchy-browser.desktop (the launcher that focuses the running
+# browser). So `get` never returns helium, `set` fails its own verification, and
+# its rollback rewrote the tracked mimeapps.list back to omarchy-browser.
+mimeapps="${XDG_CONFIG_HOME:-$HOME/.config}/mimeapps.list"
+default_handler() {
+  awk -F= -v k="$1" '/^\[/ { s = $0 } s == "[Default Applications]" && $1 == k { print $2; exit }' "$mimeapps" 2>/dev/null
+}
 if resolve_desktop "$browser_entry" >/dev/null; then
-  current=$(env -u BROWSER xdg-settings get default-web-browser 2>/dev/null || true)
-  if [[ $current != "$browser_entry" ]]; then
-    if env -u BROWSER xdg-settings set default-web-browser "$browser_entry" 2>/dev/null; then
+  current=$(default_handler x-scheme-handler/https)
+  if [[ $current != "$browser_entry" || $(default_handler x-scheme-handler/http) != "$browser_entry" ]]; then
+    if xdg-mime default "$browser_entry" x-scheme-handler/http x-scheme-handler/https text/html 2>/dev/null; then
       echo "keep-default-apps: restored helium as the default browser (was ${current:-unset})"
       notify-send -u low "Default browser restored" "The update had reset it; helium is default again" 2>/dev/null || true
     else
