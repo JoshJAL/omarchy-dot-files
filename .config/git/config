@@ -37,3 +37,5 @@
 [credential "https://gist.github.com"]
 	helper = 
 	helper = !/home/joshjal/.local/bin/gh auth git-credential
+[includeIf "gitdir:~/Projects/work/kelatik/"]
+	path = /home/joshjal/.gitconfig-kelatik

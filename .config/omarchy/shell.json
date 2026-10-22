@@ -78,6 +78,12 @@
     "position": "top",
     "transparent": false
   },
+  "cloneSourceRestores": [
+    "joshjal.notifications"
+  ],
+  "disabledPlugins": [
+    "omarchy.notifications"
+  ],
   "idle": {
     "lock": 3600,
     "screensaver": 1800
@@ -87,11 +93,5 @@
       "id": "joshjal.notifications"
     }
   ],
-  "version": 1,
-  "disabledPlugins": [
-    "omarchy.notifications"
-  ],
-  "cloneSourceRestores": [
-    "joshjal.notifications"
-  ]
+  "version": 1
 }
