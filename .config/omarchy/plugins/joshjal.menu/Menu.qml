@@ -78,7 +78,10 @@ Item {
 
   // Shared application engine (entries, hidden filters, icons, launch,
   // removal), owned by the shell and also used by the standalone launcher.
-  readonly property var appLibrary: root.shell ? root.shell.appLibrary : null
+  // The scoped plugin shell hands clones a restricted appLibrary that arrives
+  // empty on this Omarchy build, so the clone reads DesktopEntries itself and
+  // only prefers the shell's library when it is actually present.
+  readonly property var appLibrary: (root.shell && root.shell.appLibrary) ? root.shell.appLibrary : localApps
   property bool deleteConfirmOpen: false
   property var deleteTarget: null
   onOpenedChanged: if (!opened) { deleteConfirmOpen = false; deleteTarget = null }
@@ -930,6 +933,113 @@ Item {
     id: pointerGate
     referenceItem: card
   }
+
+  QtObject {
+    id: localApps
+
+    property var hiddenIds: ({})
+    signal appsChanged()
+
+    function entryName(entry) { return String((entry && entry.name) || (entry && entry.id) || "") }
+    function entrySubtext(entry) { return String((entry && entry.genericName) || "") }
+
+    function sortedEntries(query) {
+      var values = DesktopEntries.applications.values || []
+      var rows = []
+      for (var i = 0; i < values.length; i++) {
+        var entry = values[i]
+        if (!entry || entry.noDisplay || localApps.hiddenIds[String(entry.id || "")] === true) continue
+        var name = localApps.entryName(entry)
+        if (!name) continue
+        rows.push({ entry: entry, key: name.toLowerCase() })
+      }
+      rows.sort(function(a, b) { return a.key < b.key ? -1 : (a.key > b.key ? 1 : 0) })
+      return rows
+    }
+
+    function iconSource(icon) {
+      var value = String(icon || "")
+      if (value.length === 0) return Quickshell.iconPath("application-x-executable", true)
+      if (value.indexOf("file://") === 0 || value.indexOf("image://") === 0) return value
+      if (value.charAt(0) === "/") return Util.fileUrl(value)
+      var themed = Quickshell.iconPath(value, true)
+      return themed.length > 0 ? themed : Quickshell.iconPath("application-x-executable", true)
+    }
+
+    function refreshIcons() { }
+
+    function launch(desktopId, name) {
+      var id = String(desktopId || "")
+      if (id) Util.execDetached("uwsm-app -- gtk-launch " + Util.shellQuote(id + ".desktop"))
+    }
+
+    function remove(desktopId, name) {
+      var id = String(desktopId || "")
+      if (id) Util.execDetached("omarchy-remove-launcher-entry " + Util.shellQuote(id) + " " + Util.shellQuote(String(name || id)))
+    }
+
+    function loadHides(raw) {
+      var next = ({})
+      var lines = String(raw || "").split(/\n/)
+      for (var i = 0; i < lines.length; i++) {
+        var id = lines[i].trim()
+        if (id.slice(-8) === ".desktop") id = id.slice(0, -8)
+        if (id.length > 0) next[id] = true
+      }
+      for (var key in localApps.desktopHidden) next[key] = true
+      localApps.configuredHidden = next
+      localApps.rebuildHidden()
+    }
+
+    property var configuredHidden: ({})
+    property var desktopHidden: ({})
+
+    function rebuildHidden() {
+      var next = ({})
+      for (var a in localApps.configuredHidden) next[a] = true
+      for (var b in localApps.desktopHidden) next[b] = true
+      localApps.hiddenIds = next
+      localApps.appsChanged()
+    }
+  }
+
+  FileView {
+    path: (root.omarchyPath || Quickshell.env("OMARCHY_PATH")) + "/default/omarchy/launcher.hides"
+    watchChanges: true
+    printErrors: false
+    onLoaded: localApps.loadHides(text())
+    onFileChanged: reload()
+    onLoadFailed: localApps.loadHides("")
+  }
+
+  Process {
+    id: localHiddenScan
+    command: ["bash", "-c", "'" + (root.omarchyPath || Quickshell.env("OMARCHY_PATH")) + "/shell/services/hidden-entries.sh' \"$XDG_CURRENT_DESKTOP:$XDG_SESSION_DESKTOP\""]
+    property string collected: ""
+    stdout: SplitParser { onRead: function(line) { localHiddenScan.collected += line + "\n" } }
+    onStarted: collected = ""
+    onExited: {
+      var next = ({})
+      var lines = collected.split(/\n/)
+      for (var i = 0; i < lines.length; i++) {
+        var id = lines[i].trim()
+        if (id.slice(-8) === ".desktop") id = id.slice(0, -8)
+        if (id) next[id] = true
+      }
+      localApps.desktopHidden = next
+      localApps.rebuildHidden()
+    }
+  }
+
+  Connections {
+    target: DesktopEntries.applications
+    function onValuesChanged() {
+      localHiddenScan.running = true
+      localApps.appsChanged()
+    }
+  }
+
+  Component.onCompleted: localHiddenScan.running = true
 
   Connections {
     target: root.appLibrary
