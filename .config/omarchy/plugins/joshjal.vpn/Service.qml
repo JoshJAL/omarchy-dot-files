@@ -15,8 +15,8 @@ Item {
   property string lastError: ""
 
   readonly property int refreshIntervalSec: {
-    var n = parseInt(String(settings && settings.refreshIntervalSec !== undefined ? settings.refreshIntervalSec : 30), 10)
-    return isFinite(n) ? Math.max(5, Math.min(3600, n)) : 30
+    var n = parseInt(String(settings && settings.refreshIntervalSec !== undefined ? settings.refreshIntervalSec : 300), 10)
+    return isFinite(n) ? Math.max(5, Math.min(3600, n)) : 300
   }
 
   // Visible groups, with a flat cursor index stamped on every entry.
