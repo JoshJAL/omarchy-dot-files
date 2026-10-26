@@ -49,6 +49,8 @@ x-scheme-handler/claude-cli=claude-code-url-handler.desktop
 x-scheme-handler/t3code=com.t3tools.T3Code.desktop
 x-scheme-handler/slack=slack.desktop
 x-scheme-handler/t3code-dev=t3code.desktop
+application/x-neutron-lrcat=neutron-lightroom-adobe.desktop
 
 [Added Associations]
 x-scheme-handler/t3code=t3code.desktop;
+
