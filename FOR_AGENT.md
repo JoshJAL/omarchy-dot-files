@@ -199,6 +199,10 @@ Report, and do not decide alone:
 - config that differs because the machine differs (a hardware branch that needs adding)
 - a missing `secrets.env`, or anything else that needs a credential
 - any fix whose blast radius reaches the other machine on its next pull
+- the output of `.config/omarchy/hooks/post-update.d/tla-notice`, **verbatim**, if it printed
+  anything: it is the optional TLA+/TLC setup notice with a prompt for the user to paste into an
+  LLM. Running the hook in Step 2 prints it, but a hook's output is easy to drop, so relay it.
+  It is a nudge, not a failure. Do not install Java or TLC on your own initiative.
 
 **Never `commit` or `push`.** A wrong fix committed here arrives on the other machine
 automatically, and a broken tracked config reaches it before anyone notices.

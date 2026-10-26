@@ -51,7 +51,17 @@ fastfetch
 export PATH="$PATH:$HOME/.turso"
 
 # Bare dotfiles repo (work-tree = $HOME). See ~/README.md
-alias dotfiles='git --git-dir=$HOME/.dotfiles --work-tree=$HOME'
+# A function, not an alias, so a successful `dotfiles pull` can run the post-update
+# notices (optional TLA+/TLC setup) -- a pull has no hook of its own. Behaves like
+# the old alias for every other subcommand and returns git's exit status.
+dotfiles() {
+  git --git-dir="$HOME/.dotfiles" --work-tree="$HOME" "$@"
+  local rc=$?
+  if [[ $1 == pull && $rc -eq 0 && -x $HOME/.config/omarchy/hooks/post-update.d/tla-notice ]]; then
+    "$HOME/.config/omarchy/hooks/post-update.d/tla-notice"
+  fi
+  return $rc
+}
 # ~/.gitignore is deny-by-default, so tracking a NEW file needs -f. Already-tracked
 # files are unaffected by gitignore and keep working with plain `dotfiles add`.
 alias dotfiles-track='git --git-dir=$HOME/.dotfiles --work-tree=$HOME add -f'
