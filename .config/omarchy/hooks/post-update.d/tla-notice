@@ -1,0 +1,65 @@
+#!/bin/bash
+
+# Tell the user the optional TLA+/TLC model checker is not set up.
+#
+# The implementation-orchestrator skill can cross-check its execution-flow
+# chart with TLC (flow.mjs --tla). It needs Java and tla2tools.jar. Without
+# them it still works: the built-in checks run and --tla prints a skip line.
+# So this is a nudge, never a requirement, and nothing here installs anything.
+#
+# Printed after an update because that is when a freshly pulled machine is
+# otherwise silent about it. The block ends with a prompt the user can paste
+# into their own LLM to do the install.
+#
+# Silent when the skill is not present, when Java and TLC are both found, or
+# when the user opted out with:  touch ~/.config/omarchy/tla-notice.off
+#
+# Detection mirrors scripts/flow.mjs (findTlc); keep the two in step.
+
+skill="$HOME/.agents/skills/implementation-orchestrator/scripts/flow.mjs"
+[[ -f $skill ]] || exit 0
+[[ -e $HOME/.config/omarchy/tla-notice.off ]] && exit 0
+
+have_java=0
+command -v java >/dev/null 2>&1 && java -version >/dev/null 2>&1 && have_java=1
+
+have_tlc=0
+for jar in "${TLA2TOOLS_JAR:-}" "${TLC_JAR:-}" \
+           "$HOME/.local/share/tla/tla2tools.jar" "$HOME/tla2tools.jar" \
+           /usr/share/java/tla2tools.jar /opt/tlaplus/tla2tools.jar; do
+  [[ -n $jar && -f $jar ]] && { have_tlc=1; break; }
+done
+if [[ $have_tlc -eq 0 ]] && command -v tlc >/dev/null 2>&1; then have_tlc=1; fi
+
+[[ $have_java -eq 1 && $have_tlc -eq 1 ]] && exit 0
+
+missing=()
+[[ $have_java -eq 1 ]] || missing+=("Java")
+[[ $have_tlc -eq 1 ]] || missing+=("TLC (tla2tools.jar)")
+
+echo -e "\e[32m\nOptional: TLA+ model checker\e[0m"
+echo "Missing: ${missing[*]}"
+echo "The orchestrator's flow charts work without it (built-in checks only)."
+echo "Installing it adds an independent TLC cross-check. Skip it if you like;"
+echo "silence this notice with: touch ~/.config/omarchy/tla-notice.off"
+cat <<'EOF'
+
+Paste this into your LLM to set it up:
+
+  Set up the optional TLA+ model checker for my implementation-orchestrator
+  skill. Do these in order and stop on any failure:
+  1. Check `java -version`. If Java is missing, install a headless JRE with my
+     system's package manager (on Arch/Omarchy prefer mise if I use it for
+     global tools, else `pacman -S jre-openjdk-headless`). Ask me before any
+     command that needs sudo.
+  2. If ~/.local/share/tla/tla2tools.jar is missing, create that directory and
+     download tla2tools.jar from the latest release of
+     https://github.com/tlaplus/tlaplus/releases (about 2 MB).
+  3. Verify with `java -cp ~/.local/share/tla/tla2tools.jar tlc2.TLC -h`.
+  4. Copy the "Example (four packets)" JSON from
+     ~/.agents/skills/implementation-orchestrator/flow.schema.md into a scratch
+     dir and run `node ~/.agents/skills/implementation-orchestrator/scripts/flow.mjs check <file> --tla`.
+     Expect: "TLA+: 24 distinct states, no error. Agrees with built-in checker."
+  5. Do not commit or push anything. Report what you installed and where.
+EOF
+exit 0
