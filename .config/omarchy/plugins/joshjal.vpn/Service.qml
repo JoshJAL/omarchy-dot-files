@@ -26,9 +26,18 @@ Item {
   readonly property bool anyActive: activeEntries.length > 0
   readonly property string activeLabel: {
     if (activeEntries.length === 0) return "No VPN connected"
-    return activeEntries.map(function (e) { return e.name }).join(", ")
+    return activeEntries.map(function (e) { return e.brief || e.name }).join(", ")
   }
   readonly property bool busy: actionProcess.running
+
+  // Second-level (cities) view. drillCountry === "" means the top level.
+  property string drillBackend: ""
+  property string drillCountry: ""
+  property string drillTitle: ""
+  property var drillEntries: []
+  property string drillError: ""
+  readonly property bool drilling: drillCountry !== ""
+  readonly property bool drillLoading: cityProcess.running
 
   function buildGroups(res) {
     var out = []
@@ -38,7 +47,13 @@ Item {
       var r = res[d.id]
       if (!r || !r.installed) continue
       var entries = []
+      var hideNordlynx = d.id === "networkmanager" && res.nordvpn && res.nordvpn.installed
+      var hideProton = d.id === "networkmanager" && res.proton && res.proton.installed
       for (var j = 0; j < r.entries.length; j++) {
+        // NordVPN's own daemon-managed tunnel; shown via the NordVPN entry.
+        if (hideNordlynx && (r.entries[j].name === "nordlynx" || r.entries[j].ref === "nordlynx")) continue
+        // Proton's daemon-managed WireGuard profile ("ProtonVPN <server>").
+        if (hideProton && /^ProtonVPN\b/i.test(r.entries[j].name)) continue
         var e = {}
         for (var k in r.entries[j]) e[k] = r.entries[j][k]
         e.flatIndex = n++
@@ -73,6 +88,31 @@ Item {
   function elide(text) {
     var v = String(text || "").replace(/\s+/g, " ").trim()
     return v.length > 140 ? v.substring(0, 137) + "…" : v
+  }
+
+  function openCountry(entry) {
+    var d = entry ? Backends.def(entry.backend) : null
+    if (!d || !d.citiesCmd || entry.drillable !== true) return
+    cityKill.stop()
+    cityProcess.running = false
+    drillBackend = entry.backend
+    drillCountry = entry.ref
+    drillTitle = entry.name
+    drillEntries = []
+    drillError = ""
+    cityProcess.command = ["sh", "-c", d.citiesCmd(entry.ref)]
+    cityProcess.running = true
+    cityKill.restart()
+  }
+
+  function back() {
+    cityKill.stop()
+    cityProcess.running = false
+    drillBackend = ""
+    drillCountry = ""
+    drillTitle = ""
+    drillEntries = []
+    drillError = ""
   }
 
   function run(command) {
@@ -113,10 +153,16 @@ Item {
     onTriggered: root.refresh()
   }
 
+  // `nordvpn cities` talks to the daemon; reap it if it hangs.
   Timer {
-    id: errorClear
-    interval: 4000
-    onTriggered: root.actionStatus = ""
+    id: cityKill
+    interval: 15000
+    onTriggered: {
+      if (cityProcess.running) {
+        cityProcess.running = false
+        root.drillError = "Timed out loading cities."
+      }
+    }
   }
 
   // A CLI that hangs (daemon down, network flapping) would block its own
@@ -166,11 +212,31 @@ Item {
     stderr: StdioCollector { id: actionErr; waitForEnd: true }
     onExited: function (exitCode) {
       if (exitCode !== 0) {
-        root.lastError = root.elide(actionErr.text || actionOut.text || "VPN command failed")
+        var raw = String(actionErr.text || actionOut.text || "")
+        // Failures stay visible until the next action (run() clears them).
+        if (/not logged in/i.test(raw)) root.lastError = "NordVPN: not logged in. Run: nordvpn login"
+        else if (/desktop app is currently running/i.test(raw)) root.lastError = "Proton VPN: close the GUI app to use the CLI"
+        else root.lastError = root.elide(raw || "VPN command failed")
         root.actionStatus = root.lastError
-        errorClear.restart()
       }
       delayedRefresh.restart()
+    }
+  }
+
+  Process {
+    id: cityProcess
+    running: false
+    command: []
+    stdout: StdioCollector { id: cityOut; waitForEnd: true }
+    stderr: StdioCollector { id: cityErr; waitForEnd: true }
+    onExited: function (exitCode) {
+      cityKill.stop()
+      if (!root.drilling) return
+      if (exitCode !== 0) {
+        root.drillError = root.elide(cityErr.text || cityOut.text || "Could not load cities.")
+        return
+      }
+      root.drillEntries = Backends.def(root.drillBackend).parseCities(String(cityOut.text || ""), root.drillCountry, root.drillTitle)
     }
   }
 }
