@@ -82,6 +82,7 @@
 /.config/omarchy/plugins/*
 !/.config/omarchy/plugins/joshjal.taskbar/
 !/.config/omarchy/plugins/joshjal.notifications/
+!/.config/omarchy/plugins/joshjal.vpn/
 
 # --- ~/.local --------------------------------------------------------------
 # ~/.local/bin also holds generated mise wrappers, so name our scripts rather
