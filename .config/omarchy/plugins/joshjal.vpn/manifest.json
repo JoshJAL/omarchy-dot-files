@@ -14,7 +14,7 @@
     "category": "Network",
     "allowMultiple": false,
     "defaultSection": "right",
-    "defaults": { "refreshIntervalSec": 30 },
+    "defaults": { "refreshIntervalSec": 300 },
     "schema": [
       {
         "key": "refreshIntervalSec",
@@ -23,7 +23,7 @@
         "min": 5,
         "max": 3600,
         "step": 5,
-        "defaultValue": 30
+        "defaultValue": 300
       }
     ]
   }
