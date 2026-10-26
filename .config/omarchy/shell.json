@@ -24,7 +24,7 @@
       ],
       "left": [
         {
-          "id": "omarchy.menu"
+          "id": "joshjal.menu"
         },
         {
           "id": "omarchy.workspaces"
@@ -79,10 +79,12 @@
     "transparent": false
   },
   "cloneSourceRestores": [
-    "joshjal.notifications"
+    "joshjal.notifications",
+    "joshjal.menu"
   ],
   "disabledPlugins": [
-    "omarchy.notifications"
+    "omarchy.notifications",
+    "omarchy.menu"
   ],
   "idle": {
     "lock": 3600,
