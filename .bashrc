@@ -76,3 +76,6 @@ export MISE_MINIMUM_RELEASE_AGE=0
 
 # ble.sh: attach last (see top of file)
 [[ ${BLE_VERSION-} ]] && ble-attach
+
+# Resend CLI
+export PATH="$HOME/.resend/bin:$PATH"
