@@ -9,6 +9,8 @@ gemini = { version = "latest", allow_builds = ["@github/keytar", "node-pty"] }
 gh = "latest"
 "github:microsoftgraph/msgraph-cli" = { version = "latest", exe = "mgc" }
 glab = "latest"
+"http:muse" = { version = "latest", url = "https://api.meta.ai/muse-launcher.sh", bin = "muse", version_list_url = "https://api.meta.ai/muse-code/channels/muse-stable", version_json_path = ".version" }
+java = "latest"
 node = "latest"
 "npm:mex-agent" = "latest"
 "npm:playwright" = "latest"
