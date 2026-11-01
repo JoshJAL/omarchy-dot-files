@@ -1,0 +1,7 @@
+#!/bin/bash
+# Publish the active Omarchy theme name to a tracked file (read by the Mac side).
+# Never fail the theme switch if the write fails.
+theme="$1"
+[[ -n $theme ]] || exit 0
+{ mkdir -p "$HOME/.config/omarchy" && printf '%s\n' "$theme" >"$HOME/.config/omarchy/current-theme"; } 2>/dev/null || true
+exit 0
