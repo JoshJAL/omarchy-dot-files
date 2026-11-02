@@ -1,0 +1,7 @@
+[Unit]
+Description=Watch GNOME keyring file
+[Path]
+PathChanged=%h/.local/share/keyrings/Default_keyring.keyring
+Unit=keyring-guard.service
+[Install]
+WantedBy=default.target

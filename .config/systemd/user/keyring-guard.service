@@ -1,0 +1,5 @@
+[Unit]
+Description=Validate/repair GNOME keyring file
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/keyring-guard
