@@ -12,7 +12,7 @@ glab = "latest"
 "http:muse" = { version = "latest", url = "https://api.meta.ai/muse-launcher.sh", bin = "muse", version_list_url = "https://api.meta.ai/muse-code/channels/muse-stable", version_json_path = ".version" }
 java = "latest"
 node = "latest"
-"npm:mex-agent" = "latest"
+"npm:mex-agent" = { version = "latest", allow_low_downloads = true }
 "npm:playwright" = "latest"
 "npm:vercel" = { version = "latest", trust_policy_excludes = ["@vercel/backends", "@vercel/build-utils", "@vercel/cervel", "@vercel/cli-auth", "@vercel/cli-config", "@vercel/cli-exec", "@vercel/container", "@vercel/detect-agent", "@vercel/elysia", "@vercel/error-utils", "@vercel/express", "@vercel/fastify", "@vercel/gatsby-plugin-vercel-analytics", "@vercel/gatsby-plugin-vercel-builder", "@vercel/go", "@vercel/h3", "@vercel/hono", "@vercel/hydrogen", "@vercel/koa", "@vercel/nestjs", "@vercel/next", "@vercel/node", "@vercel/oidc", "@vercel/python", "@vercel/python-analysis", "@vercel/redwood", "@vercel/remix-builder", "@vercel/ruby", "@vercel/rust", "@vercel/static-build", "@vercel/static-config", "@vercel/vc-native-darwin-arm64", "@vercel/vc-native-darwin-x64", "@vercel/vc-native-linux-arm64", "@vercel/vc-native-linux-x64", "@vercel/vc-native-win32-x64", "vercel"] }
 opencode = "latest"
