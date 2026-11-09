@@ -156,3 +156,7 @@ id_ed25519*
 *.tgz
 *.zip
 *.log
+
+# Per-machine mise overrides (e.g. levine pins java = "temurin-21"). Outranks
+# config.toml, so a machine can differ without dirtying the shared file.
+/.config/mise/config.local.toml
