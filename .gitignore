@@ -105,7 +105,6 @@
 !/.local/bin/zed-launch
 !/.local/share/
 /.local/share/*
-!/.local/share/omarchy-mise-fix/
 
 # ---------------------------------------------------------------------------
 # 3. Never, under any circumstances.
