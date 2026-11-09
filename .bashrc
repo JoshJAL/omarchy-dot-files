@@ -79,3 +79,8 @@ export MISE_MINIMUM_RELEASE_AGE=0
 
 # Resend CLI
 export PATH="$HOME/.resend/bin:$PATH"
+
+# New agent threads start at sonnet / medium. Flags are per-session; /model and /effort inside a
+# thread still work, and the next launch starts at these again regardless of the saved default.
+alias claude='claude --model sonnet --effort medium'
+alias codex='codex -c model_reasoning_effort=medium'
