@@ -6,7 +6,7 @@
           "format": "ddd d MMM h:mm AP",
           "formatAlt": "d MMMM 'W'ww yyyy",
           "id": "omarchy.clock",
-          "verticalFormat": "h\n—\nmm\nAP"
+          "verticalFormat": "h\n\u2014\nmm\nAP"
         }
       ],
       "left": [
@@ -34,6 +34,13 @@
         },
         {
           "id": "omarchy.tailscale"
+        },
+        {
+          "id": "proton-vpn",
+          "type": "command",
+          "exec": "~/.config/omarchy/bar/scripts/proton-status",
+          "interval": 10,
+          "onClick": "setsid -f protonvpn-app"
         },
         {
           "id": "joshjal.agents"

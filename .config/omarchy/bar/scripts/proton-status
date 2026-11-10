@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Proton VPN connection state as Waybar-style JSON
+out=$(protonvpn status 2>/dev/null)
+if grep -qi '^Status: *Connected' <<<"$out"; then
+  srv=$(grep -iE '^(Server|Country|City)' <<<"$out" | head -1 | sed 's/^[^:]*: *//')
+  printf '{"text":"󰌾 %s","tooltip":"Proton VPN connected - click to open"}\n' "${srv:-VPN}"
+else
+  printf '{"text":"󰦞","tooltip":"Proton VPN disconnected - click to open"}\n'
+fi
