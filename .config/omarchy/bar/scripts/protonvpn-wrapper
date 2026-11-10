@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Proton VPN CLI wrapper: the stock CLI refuses to run while the GUI is open.
+# If the GUI is running, quit it quietly first (the VPN connection survives), then run the real CLI.
+real=/usr/bin/protonvpn
+case " $* " in *" -h "*|*" --help "*) exec "$real" "$@" ;; esac
+
+gui_up() { busctl --user list --no-legend 2>/dev/null | grep -q '^proton\.vpn\.app\.gtk '; }
+
+if gui_up; then
+  pid=$(pgrep -x -f '/usr/bin/python /usr/bin/protonvpn-app' | head -1)
+  [[ -n $pid ]] && kill -TERM "$pid"
+  for _ in $(seq 1 25); do gui_up || break; sleep 0.2; done
+  if gui_up; then
+    echo "Error: could not close the Proton VPN app; close it manually." >&2
+    exit 1
+  fi
+fi
+exec "$real" "$@"

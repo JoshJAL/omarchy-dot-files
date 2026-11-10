@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
-# Proton VPN state from NetworkManager (the protonvpn CLI refuses to run while the GUI is open)
+# Proton VPN state from NetworkManager (the protonvpn CLI refuses to run while the GUI is open).
+# Friendly label ("Miami, US") comes from Proton's cached server list.
 name=$(nmcli -t -f NAME,TYPE con show --active 2>/dev/null | grep -E '^ProtonVPN .*:wireguard$' | head -1 | cut -d: -f1)
 if [[ -n $name ]]; then
   srv=${name#ProtonVPN }
-  printf '{"text":"󰌾 %s","tooltip":"Proton VPN connected: %s - click to open"}\n' "$srv" "$srv"
+  label=$(python3 - "$srv" <<'PY' 2>/dev/null
+import json, sys, os
+p = os.path.expanduser("~/.cache/Proton/VPN/serverlist.json")
+for l in json.load(open(p)).get("LogicalServers", []):
+    if l.get("Name") == sys.argv[1]:
+        print(f'{l.get("City") or l.get("ExitCountry")}, {l.get("ExitCountry")}'); break
+PY
+)
+  printf '{"text":"󰌾 %s","tooltip":"Proton VPN connected: %s (%s) - click to open"}\n' "${label:-$srv}" "$srv" "${label:-unknown location}"
 else
   printf '{"text":"󰦞","tooltip":"Proton VPN disconnected - click to open"}\n'
 fi
