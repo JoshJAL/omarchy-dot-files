@@ -184,6 +184,11 @@ Step 5 is the authority; this is the checklist form:
    non-zero on drift between the bundle and the installed system files. Report drift; do not run
    `install.sh` to fix it without asking — it replaces root-owned files (via `pkexec`) and can
    restart `libvirtd`. Never run `winvm-gpu on|off`: a GPU handover costs the user a log out.
+6. **`~/.config/git/local`** — per-machine git identity override, untracked on purpose. The
+   tracked `~/.config/git/config` includes it and git ignores it when absent, so a missing file is
+   not an error. Never `git add -f` it, and never put a work or client email in any tracked file:
+   the remote is public. If `git config user.email` on a work machine shows the noreply address,
+   the file is missing there; ask the user, do not guess an address.
 
 ---
 

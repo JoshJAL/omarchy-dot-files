@@ -145,6 +145,15 @@ These are ignored by design and will not arrive with a clone:
    the VM (`/etc/win11-vm.conf` exists), run `~/win11-gpu-vm/install.sh --check`. If it should
    start running one, follow `~/win11-gpu-vm/FOR_AGENT.md` from the top (`detect.sh` decides
    whether the hardware can). Otherwise skip it; nothing else depends on it.
+7. **`~/.config/git/local`** — per-machine git identity, deliberately untracked (it is in
+   `.gitignore`). The tracked `~/.config/git/config` uses the GitHub noreply address and ends with
+   `[include] path = ~/.config/git/local`, which git silently skips when the file is missing.
+   Create it only where a different identity is needed, for example a work or client override:
+   ```ini
+   [includeIf "gitdir:~/Projects/work/<client>/"]
+       path = ~/.gitconfig-<client>
+   ```
+   Put the real name and email in that second file, not in this repo.
 
 ---
 

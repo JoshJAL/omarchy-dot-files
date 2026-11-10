@@ -50,6 +50,9 @@
 !/.config/ghostty/
 !/.config/kitty/
 !/.config/git/
+# Per-machine identity overrides: never tracked, the remote is public.
+/.config/git/gitlab
+/.config/git/local
 !/.config/mise/
 !/.config/repo-lag/
 !/.config/brave-flags.conf
