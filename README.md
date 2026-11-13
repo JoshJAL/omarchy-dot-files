@@ -96,10 +96,13 @@ entry back into `~/.config/mise/config.toml` that outranks Omarchy's declaration
 that reason; `pacman -Qkk omarchy` should report nothing for `omarchy-mise-install`.
 
 **Temporary exception: `~/.local/bin/mex` (added 2026-11-13).** It runs the installed
-`npm:mex-agent` under Node 24 with `mise exec node@24`, because on Node 26 `node:sqlite`
-throws `ERR_OUT_OF_RANGE` when an FTS5 `contentless_delete` table records a delete, and
-`mex graph refresh` aborts ([mex#320](https://github.com/mex-memory/mex/issues/320), fix in [mex#348](https://github.com/mex-memory/mex/pull/348)). It is
-safe beside the rule above: `mise exec` writes no config, and mex is declared in
+`npm:mex-agent` under Node 24, because on Node 26 `node:sqlite` throws `ERR_OUT_OF_RANGE`
+when an FTS5 `contentless_delete` table records a delete, and `mex graph refresh` aborts
+([mex#320](https://github.com/mex-memory/mex/issues/320), fix in
+[mex#348](https://github.com/mex-memory/mex/pull/348)). It puts `$(mise where node@24)/bin`
+first in PATH: `mise exec node@24` alone is not enough, because the mex launcher runs a bare
+`node` and child processes still find Omarchy's `/usr/bin/node` (26) first. It is safe
+beside the rule above: `mise where` writes no config, and mex is declared in
 `~/.config/mise/config.toml`, not by Omarchy. **Delete it** once an installed mex release
 contains the fix: edit a tracked source file in a mex project, run the plain binary
 (`~/.local/share/mise/installs/npm-mex-agent/latest/node_modules/.bin/mex graph refresh`),
