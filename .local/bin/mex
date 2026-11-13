@@ -2,7 +2,7 @@
 # Runs mex under Node 24. On Node 26, node:sqlite throws ERR_OUT_OF_RANGE when an
 # FTS5 contentless_delete table records a delete (its tombstone rowid is above
 # 2^53), so `mex graph refresh` aborts. Node 22/24 accept it.
-# Bug: https://github.com/mex-memory/mex/issues/320
+# Bug: https://github.com/mex-memory/mex/issues/320 (fix PR: https://github.com/mex-memory/mex/pull/348)
 # REMOVE THIS FILE once an installed mex release contains the fix and
 # `mex graph refresh` succeeds on Node 26 after a source change.
 exec mise exec node@24 -- "$HOME/.local/share/mise/installs/npm-mex-agent/latest/node_modules/.bin/mex" "$@"

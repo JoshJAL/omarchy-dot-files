@@ -98,7 +98,7 @@ that reason; `pacman -Qkk omarchy` should report nothing for `omarchy-mise-insta
 **Temporary exception: `~/.local/bin/mex` (added 2026-11-13).** It runs the installed
 `npm:mex-agent` under Node 24 with `mise exec node@24`, because on Node 26 `node:sqlite`
 throws `ERR_OUT_OF_RANGE` when an FTS5 `contentless_delete` table records a delete, and
-`mex graph refresh` aborts ([mex#320](https://github.com/mex-memory/mex/issues/320)). It is
+`mex graph refresh` aborts ([mex#320](https://github.com/mex-memory/mex/issues/320), fix in [mex#348](https://github.com/mex-memory/mex/pull/348)). It is
 safe beside the rule above: `mise exec` writes no config, and mex is declared in
 `~/.config/mise/config.toml`, not by Omarchy. **Delete it** once an installed mex release
 contains the fix: edit a tracked source file in a mex project, run the plain binary
