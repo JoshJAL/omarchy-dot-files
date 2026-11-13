@@ -95,18 +95,20 @@ entry back into `~/.config/mise/config.toml` that outranks Omarchy's declaration
 `fix-mise-wrappers` hook and patched `omarchy-mise-install` were retired on 2026-11-09 for
 that reason; `pacman -Qkk omarchy` should report nothing for `omarchy-mise-install`.
 
-**Temporary exception: `~/.local/bin/mex` (added 2026-11-13).** It runs the installed
-`npm:mex-agent` under Node 24, because on Node 26 `node:sqlite` throws `ERR_OUT_OF_RANGE`
-when an FTS5 `contentless_delete` table records a delete, and `mex graph refresh` aborts
-([mex#320](https://github.com/mex-memory/mex/issues/320), fix in
-[mex#348](https://github.com/mex-memory/mex/pull/348)). It puts `$(mise where node@24)/bin`
-first in PATH: `mise exec node@24` alone is not enough, because the mex launcher runs a bare
-`node` and child processes still find Omarchy's `/usr/bin/node` (26) first. It is safe
-beside the rule above: `mise where` writes no config, and mex is declared in
-`~/.config/mise/config.toml`, not by Omarchy. **Delete it** once an installed mex release
-contains the fix: edit a tracked source file in a mex project, run the plain binary
-(`~/.local/share/mise/installs/npm-mex-agent/latest/node_modules/.bin/mex graph refresh`),
-and remove the wrapper if that reports `status fresh`.
+**Temporary: mex pinned to Node 24 (added 2026-11-13).** On Node 26, `node:sqlite` throws
+`ERR_OUT_OF_RANGE` when an FTS5 `contentless_delete` table records a delete, and
+`mex graph refresh` aborts ([mex#320](https://github.com/mex-memory/mex/issues/320), fix in
+[mex#348](https://github.com/mex-memory/mex/pull/348)). The `npm:mex-agent` entry in
+`~/.config/mise/config.toml` has a `postinstall` that links
+`~/.local/share/mise/installs/node/24/bin/node` as `node` next to mex's launcher
+(`node_modules/.bin/node`), which the launcher runs in preference to a bare `node`. That covers
+terminals, agents, mise shims and the mex post-commit hook regardless of PATH order. A
+`~/.local/bin/mex` PATH wrapper was tried first and does not work: Omarchy puts mise shims
+and `mise activate` paths ahead of `~/.local/bin`. On a new machine, `mise install node@24`
+before mex, or run `mise install -f npm:mex-agent` afterwards. **Undo it** once an installed
+mex release contains the fix: delete the `postinstall` option (and its comment), run
+`rm ~/.local/share/mise/installs/npm-mex-agent/latest/node_modules/.bin/node`, edit a tracked
+source file in a mex project, and confirm `mex graph refresh` reports `status fresh`.
 
 **Omarchy 4 ("Quattro") note.** Hyprland config is Lua now, not hyprlang — the
 old `~/.config/hypr/*.conf` files are dead and untracked. waybar, walker, mako

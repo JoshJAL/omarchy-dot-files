@@ -3,7 +3,11 @@
 bun = "latest"
 "github:microsoftgraph/msgraph-cli" = { version = "latest", exe = "mgc" }
 java = "latest"
-"npm:mex-agent" = { version = "latest", allow_low_downloads = true }
+# mex runs on Node 24: on Node 26, node:sqlite throws on FTS5 tombstone rowids and
+# `mex graph refresh` aborts (mex-memory/mex#320, fix PR #348). mex's launcher runs
+# `$basedir/node` when present, so link Node 24 there after every install. Remove the
+# postinstall (and the .bin/node link) once a mex release with the fix is installed.
+"npm:mex-agent" = { version = "latest", allow_low_downloads = true, postinstall = 'ln -sfn "$HOME/.local/share/mise/installs/node/24/bin/node" "$MISE_TOOL_INSTALL_PATH/node_modules/.bin/node"' }
 "npm:vercel" = { version = "latest", trust_policy_excludes = ["@vercel/backends", "@vercel/build-utils", "@vercel/cervel", "@vercel/cli-auth", "@vercel/cli-config", "@vercel/cli-exec", "@vercel/container", "@vercel/detect-agent", "@vercel/elysia", "@vercel/error-utils", "@vercel/express", "@vercel/fastify", "@vercel/gatsby-plugin-vercel-analytics", "@vercel/gatsby-plugin-vercel-builder", "@vercel/go", "@vercel/h3", "@vercel/hono", "@vercel/hydrogen", "@vercel/koa", "@vercel/nestjs", "@vercel/next", "@vercel/node", "@vercel/oidc", "@vercel/python", "@vercel/python-analysis", "@vercel/redwood", "@vercel/remix-builder", "@vercel/ruby", "@vercel/rust", "@vercel/static-build", "@vercel/static-config", "@vercel/vc-native-darwin-arm64", "@vercel/vc-native-darwin-x64", "@vercel/vc-native-linux-arm64", "@vercel/vc-native-linux-x64", "@vercel/vc-native-win32-x64", "vercel"] }
 opencode = { version = "latest", allow_builds = ["@opencode/cli"], minimum_release_age = "0s", lazy = true, auto_update = "4h" }
 pnpm = "latest"
