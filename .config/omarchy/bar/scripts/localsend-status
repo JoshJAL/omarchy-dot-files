@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Show an icon while LocalSend is running (even minimized to the background); print nothing once it is quit.
+if pgrep -x localsend >/dev/null; then
+  printf '{"text":"󰒖","tooltip":"LocalSend running - click to open, right-click to quit"}\n'
+fi

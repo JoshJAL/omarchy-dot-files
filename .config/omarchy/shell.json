@@ -43,6 +43,14 @@
           "onClick": "setsid -f protonvpn-app"
         },
         {
+          "id": "localsend",
+          "type": "command",
+          "exec": "~/.config/omarchy/bar/scripts/localsend-status",
+          "interval": 3,
+          "onClick": "omarchy-launch-or-focus localsend_app 'localsend'",
+          "onRightClick": "pkill -x localsend"
+        },
+        {
           "id": "joshjal.agents"
         },
         {
