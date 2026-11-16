@@ -43,6 +43,12 @@ for entry in "${APPS[@]}"; do
 
   addr=$(addr_of "$cls")
   if [[ -z $addr ]]; then
+    # Not installed on this machine (e.g. no Slack): skip instead of waiting
+    # out the timeout for a window that will never appear.
+    read -ra argv <<<"$cmd"
+    bin=${argv[0]}; [[ $bin == setsid ]] && bin=${argv[1]}
+    [[ $bin == uwsm-app ]] && bin=${argv[3]:-slack}
+    command -v "$bin" >/dev/null || continue
     $cmd >/dev/null 2>&1 &
     addr=$(wait_for "$cls") || continue
   fi
