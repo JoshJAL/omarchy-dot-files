@@ -86,6 +86,7 @@
 !/.config/omarchy/plugins/joshjal.taskbar/
 !/.config/omarchy/plugins/joshjal.notifications/
 !/.config/omarchy/plugins/joshjal.menu/
+!/.config/omarchy/plugins/joshjal.tray/
 !/.config/omarchy/plugins/joshjal.vpn/
 
 # --- ~/.local --------------------------------------------------------------
