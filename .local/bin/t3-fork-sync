@@ -108,12 +108,20 @@ if [ "$upstream_has" = 0 ]; then
 fi
 
 rm -rf release; export T3CODE_DESKTOP_VERSION="${latest_tag#v}"
-# Official release CI injects the public T3 Connect config (Clerk key, relay URL). A local build
-# has none unless we load it from the tag'"'"'s .env.example, and without it sign-in never loads.
-while IFS='=' read -r k v; do
-  case "$k" in T3CODE_CLERK_PUBLISHABLE_KEY|T3CODE_CLERK_JWT_TEMPLATE|T3CODE_CLERK_CLI_OAUTH_CLIENT_ID|T3CODE_RELAY_URL) export "$k=$v";; esac
-done < .env.example
-[ -n "${T3CODE_CLERK_PUBLISHABLE_KEY:-}" ] || { git checkout -q "$DAILY_BRANCH"; die "no T3 Connect public config in .env.example; build would lose sign-in"; }
+# Official release CI injects the public T3 Connect config (Clerk key, relay URL); a local build
+# has none, so sign-in never loads. Always add it: start from the saved defaults below (public
+# values, current as of v0.1.9), then let the new tag's .env.example override them so upstream
+# changes are picked up. If upstream drops or renames them, the defaults still apply.
+export T3CODE_CLERK_PUBLISHABLE_KEY="${T3_FORK_CLERK_PUBLISHABLE_KEY:-pk_live_Y2xlcmsudDMuY29kZXMk}"
+export T3CODE_CLERK_JWT_TEMPLATE="${T3_FORK_CLERK_JWT_TEMPLATE:-t3-relay}"
+export T3CODE_CLERK_CLI_OAUTH_CLIENT_ID="${T3_FORK_CLERK_CLI_OAUTH_CLIENT_ID:-hzxSgY2cH10sDU2r}"
+export T3CODE_RELAY_URL="${T3_FORK_RELAY_URL:-https://relay.t3.codes}"
+if [ -f .env.example ]; then
+  while IFS='=' read -r k v; do
+    [ -n "$v" ] || continue
+    case "$k" in T3CODE_CLERK_PUBLISHABLE_KEY|T3CODE_CLERK_JWT_TEMPLATE|T3CODE_CLERK_CLI_OAUTH_CLIENT_ID|T3CODE_RELAY_URL) export "$k=$v";; esac
+  done < .env.example
+fi
 node_modules/.bin/vp run dist:desktop:linux >>"$LOG" 2>&1 || { git checkout -q "$DAILY_BRANCH"; die "AppImage build failed on $latest_tag. Installed app untouched. See $LOG"; }
 new=$(ls -t release/*.AppImage 2>/dev/null | head -1)
 [ -n "$new" ] && [ "$(stat -c %s "$new")" -gt 100000000 ] || { git checkout -q "$DAILY_BRANCH"; die "build produced no usable AppImage"; }
