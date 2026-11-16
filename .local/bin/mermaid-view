@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Needs: mermaid-cli (mmdc), imv, inotify-tools. New machine: update-mime-database ~/.local/share/mime
+# Render a mermaid file and view it in imv; re-render live whenever the source is saved.
+set -u
+f="$(realpath "${1:?usage: mermaid-view <file.mmd>}")"
+dir="$(mktemp -d)"; out="$dir/$(basename "${f%.*}").png"
+render() { mmdc -i "$f" -o "$dir/new.png" -b transparent -s 2 2>"$dir/err" && mv "$dir/new.png" "$out"; }
+if ! render; then
+  notify-send "Mermaid render failed" "$(tail -3 "$dir/err")"
+  exec omarchy launch editor "$f"
+fi
+imv "$out" &
+imv_pid=$!
+trap 'kill $imv_pid 2>/dev/null; rm -rf "$dir"' EXIT
+# Watch the parent dir so editors that save via rename (nvim) are caught.
+inotifywait -m -q -e close_write,moved_to --format '%f' "$(dirname "$f")" 2>/dev/null |
+while read -r name; do
+  kill -0 $imv_pid 2>/dev/null || break
+  [ "$name" = "$(basename "$f")" ] || continue
+  render && continue
+  notify-send "Mermaid render failed" "$(tail -3 "$dir/err")"
+done &
+wait $imv_pid
+kill 0 2>/dev/null

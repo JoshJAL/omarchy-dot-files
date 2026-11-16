@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Mermaid Viewer
+Comment=Render a Mermaid diagram and view it
+Exec=/home/joshjal/.local/bin/mermaid-view %f
+MimeType=text/vnd.mermaid;
+NoDisplay=true
+Terminal=false
