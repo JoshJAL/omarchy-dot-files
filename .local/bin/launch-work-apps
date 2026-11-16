@@ -1,8 +1,58 @@
 #!/bin/bash
-# Launch Outlook, Teams, and Slack. Skips any app that already has a window.
-running() { hyprctl clients -j | jq -e --arg c "$1" 'any(.[]; .class | test($c; "i"))' >/dev/null; }
+# Launch Slack, Outlook and Teams as ONE tabbed group. Skips any app that
+# already has a window.
+#
+# How it works: Hyprland's group:auto_group (default true) puts a newly opened
+# window into the group that is focused at that moment. So: get the first app
+# open, turn its window into a group, then launch the rest one at a time and
+# wait for each to map before starting the next. Launching them all at once
+# would race -- focus would bounce between half-mapped windows and some would
+# land outside the group.
+#
+# Lua dispatcher dialect: hl.dsp.* only (see hypr-scratchpad-toggle).
 
-running '^slack$' || setsid uwsm-app -- slack >/dev/null 2>&1 &
-running 'outlook' || setsid omarchy-launch-webapp "https://outlook.office.com/mail/" >/dev/null 2>&1 &
-running 'teams' || setsid omarchy-launch-webapp "https://teams.microsoft.com/v2/" >/dev/null 2>&1 &
-wait
+# class-regex|launch command, in tab order
+APPS=(
+  '^slack$|setsid uwsm-app -- slack'
+  'outlook|setsid omarchy-launch-webapp https://outlook.office.com/mail/'
+  'teams|setsid omarchy-launch-webapp https://teams.microsoft.com/v2/'
+)
+
+# Print the address of the first window whose class matches $1 (empty if none).
+addr_of() { hyprctl clients -j | jq -r --arg c "$1" 'first(.[] | select(.class | test($c; "i")) | .address) // empty'; }
+
+# Wait up to ~30s for a window matching $1 to appear; print its address.
+wait_for() {
+  local a i
+  for ((i = 0; i < 150; i++)); do
+    a=$(addr_of "$1")
+    [[ -n $a ]] && { printf '%s\n' "$a"; return 0; }
+    sleep 0.2
+  done
+  return 1
+}
+
+focus() { hyprctl dispatch "hl.dsp.focus({ window = \"address:$1\" })" >/dev/null; }
+
+is_grouped() { hyprctl clients -j | jq -e --arg a "$1" 'any(.[]; .address == $a and (.grouped | length) > 0)' >/dev/null; }
+
+anchor=
+for entry in "${APPS[@]}"; do
+  cls=${entry%%|*}
+  cmd=${entry#*|}
+
+  addr=$(addr_of "$cls")
+  if [[ -z $addr ]]; then
+    $cmd >/dev/null 2>&1 &
+    addr=$(wait_for "$cls") || continue
+  fi
+
+  if [[ -z $anchor ]]; then
+    # First app on screen becomes the group. Give it focus, then group it.
+    anchor=$addr
+    focus "$anchor"
+    sleep 0.3
+    is_grouped "$anchor" || hyprctl dispatch 'hl.dsp.group.toggle()' >/dev/null
+    sleep 0.3
+  fi
+done
