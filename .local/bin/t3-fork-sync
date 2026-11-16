@@ -29,6 +29,23 @@ log() { printf '%s %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG"; }
 notify() { command -v notify-send >/dev/null && notify-send -a t3-fork-sync "T3 fork sync" "$1" || true; log "NOTIFY: $1"; }
 die() { notify "$1"; exit 1; }
 
+# Sign-in config check. pre: upstream still reads the four settings by these names (a rename
+# means our values would be ignored). post: the built bundles actually contain them.
+verify_connect_config() {
+  local stage="$1" names="T3CODE_CLERK_PUBLISHABLE_KEY T3CODE_CLERK_JWT_TEMPLATE T3CODE_CLERK_CLI_OAUTH_CLIENT_ID T3CODE_RELAY_URL" n
+  if [ "$stage" = pre ]; then
+    for n in $names; do
+      grep -rqs "$n" scripts/lib/public-config.ts apps/desktop/vite.config.ts \
+        || { echo "upstream no longer reads $n"; return 1; }
+    done
+  else
+    grep -rqsF "$T3CODE_CLERK_PUBLISHABLE_KEY" apps/desktop/dist-electron apps/web/dist \
+      || { echo "built app does not contain the Clerk key"; return 1; }
+    grep -rqsF "$T3CODE_RELAY_URL" apps/web/dist apps/server/dist \
+      || { echo "built app does not contain the relay URL"; return 1; }
+  fi
+}
+
 cd "$REPO" || die "repo missing: $REPO"
 git fetch -q origin --tags || die "git fetch failed (offline?)"
 
@@ -122,7 +139,9 @@ if [ -f .env.example ]; then
     case "$k" in T3CODE_CLERK_PUBLISHABLE_KEY|T3CODE_CLERK_JWT_TEMPLATE|T3CODE_CLERK_CLI_OAUTH_CLIENT_ID|T3CODE_RELAY_URL) export "$k=$v";; esac
   done < .env.example
 fi
+verify_connect_config pre >>"$LOG" 2>&1 || { r=$(verify_connect_config pre); git checkout -q "$DAILY_BRANCH"; die "T3 Connect sign-in config: $r. Installed app untouched. Update t3-fork-sync."; }
 node_modules/.bin/vp run dist:desktop:linux >>"$LOG" 2>&1 || { git checkout -q "$DAILY_BRANCH"; die "AppImage build failed on $latest_tag. Installed app untouched. See $LOG"; }
+r=$(verify_connect_config post) || { git checkout -q "$DAILY_BRANCH"; die "T3 Connect sign-in config missing from build: $r. Installed app untouched."; }
 new=$(ls -t release/*.AppImage 2>/dev/null | head -1)
 [ -n "$new" ] && [ "$(stat -c %s "$new")" -gt 100000000 ] || { git checkout -q "$DAILY_BRANCH"; die "build produced no usable AppImage"; }
 
