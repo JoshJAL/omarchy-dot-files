@@ -72,12 +72,15 @@ agentfiles() {
   local -a g=(git --git-dir="$HOME/.agentfiles" --work-tree="$HOME")
   if [[ $1 == push ]]; then
     local rc
-    { "${g[@]}" "$@" 2>&1 1>&3 3>&- | awk '
+    {
+      "${g[@]}" "$@" 2>&1 1>&3 3>&- | awk '
       /^remote: *$/ && !skip { if (held) print held; held = $0; next }
       /^remote: Bypassed rule violations/ { held = ""; skip = 1; next }
       skip && (/^remote: *$/ || /^remote: - /) { next }
       { skip = 0; if (held) print held; held = ""; print }
-      END { if (held) print held }' >&2; rc=${PIPESTATUS[0]}; } 3>&1
+      END { if (held) print held }' >&2
+      rc=${PIPESTATUS[0]}
+    } 3>&1
     return $rc
   fi
   "${g[@]}" "$@"
@@ -92,9 +95,6 @@ export MISE_MINIMUM_RELEASE_AGE=0
 
 # ble.sh: attach last (see top of file)
 [[ ${BLE_VERSION-} ]] && ble-attach
-
-# Resend CLI
-export PATH="$HOME/.resend/bin:$PATH"
 
 # New agent threads start at sonnet / medium. Flags are per-session; /model and /effort inside a
 # thread still work, and the next launch starts at these again regardless of the saved default.
