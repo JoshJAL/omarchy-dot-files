@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily check for a new T3 stable release
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# Keeps the patched T3 desktop app on the newest stable release.
+#
+# Daily (systemd timer) or by hand:  t3-fork-sync [--check|--force]
+#   --check  report only; change nothing
+#   --force  rebuild even when no new stable release exists
+#
+# New stable tag vX.Y.Z exists?
+#   - Upstream already has the modelSelection change -> build the stock tag, tell you.
+#   - Otherwise cherry-pick the patch commit(s) onto the tag, run the changed-file
+#     checks, build the AppImage, and swap it in (old one kept as .bak-*).
+# Any failure leaves the installed AppImage untouched and sends a notification.
+set -uo pipefail
+
+REPO="${T3_FORK_REPO:-$HOME/Projects/personal/t3code}"           # clone with origin = pingdotgg/t3code
+WORKTREE="${T3_FORK_WORKTREE:-$HOME/Projects/personal/t3code-daily}"
+DAILY_BRANCH="${T3_FORK_DAILY_BRANCH:-daily/stable-modelswitch}"
+APPIMAGE="${T3_FORK_APPIMAGE:-$HOME/.local/share/t3code/T3-Code.AppImage}"
+STATE="$HOME/.local/state/t3-fork-sync"
+LOG="$STATE/sync.log"
+MODE="${1:-run}"
+
+export PATH="$HOME/.local/share/mise/command-wrappers/bin:$HOME/.local/share/mise/shims:$HOME/.local/bin:/usr/local/bin:/usr/bin:$PATH"
+mkdir -p "$STATE"
+exec 9>"$STATE/lock"
+flock -n 9 || { echo "another sync is running"; exit 0; }
+
+log() { printf '%s %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG"; }
+notify() { command -v notify-send >/dev/null && notify-send -a t3-fork-sync "T3 fork sync" "$1" || true; log "NOTIFY: $1"; }
+die() { notify "$1"; exit 1; }
+
+cd "$REPO" || die "repo missing: $REPO"
+git fetch -q origin --tags || die "git fetch failed (offline?)"
+
+latest_tag=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+[ -n "$latest_tag" ] || die "no stable tag found"
+
+cd "$WORKTREE" || die "worktree missing: $WORKTREE"
+git diff --quiet && git diff --cached --quiet || die "worktree $WORKTREE has uncommitted changes; not touching it"
+git checkout -q "$DAILY_BRANCH" || die "cannot check out $DAILY_BRANCH"
+
+if git merge-base --is-ancestor "$latest_tag" HEAD && [ "$MODE" != "--force" ]; then
+  log "up to date: $DAILY_BRANCH already contains $latest_tag"
+  exit 0
+fi
+log "new stable release: $latest_tag"
+[ "$MODE" = "--check" ] && exit 0
+
+old_base=$(git describe --tags --abbrev=0 --exclude '*nightly*' --exclude 'mobile-*' HEAD)
+patches=$(git rev-list --reverse "$old_base..HEAD")
+[ -n "$patches" ] || die "no patch commits above $old_base; nothing to re-apply"
+
+next="daily/next-$latest_tag"
+git branch -D "$next" >/dev/null 2>&1 || true
+git checkout -q -b "$next" "$latest_tag" || die "cannot create $next"
+
+# 1. Exact check: does t3_thread_send's input already carry modelSelection upstream?
+contracts=packages/contracts/src/orchestratorMcp.ts
+upstream_has=0
+if git show "$latest_tag:$contracts" 2>/dev/null \
+   | awk '/^export const OrchestratorMcpThreadSendInput\b/{f=1;next} f&&/^export const /{exit} f' \
+   | grep -q 'modelSelection'; then
+  upstream_has=1; reason="t3_thread_send input already has modelSelection"
+fi
+
+# 2. Review: a read-only Claude reads what changed between the two tags in the files the
+#    patch touches and says whether upstream did the same job, in the same or another shape.
+review="$STATE/review-$latest_tag.md"
+if [ "$upstream_has" = 0 ] && command -v claude >/dev/null; then
+  files=$(git diff --name-only "$old_base" "$DAILY_BRANCH" | tr '\n' ' ')
+  patch_msg=$(git log -1 --format=%B "$(echo "$patches" | tail -1)")
+  printf '%s' "You review an upstream release for overlap with a local patch. Read-only; change nothing.
+Repo checkout is at release $latest_tag. The patch was written on $old_base. Patch commit message:
+$patch_msg
+Files the patch touches: $files
+Use 'git log $old_base..$latest_tag -- <files>' and 'git diff $old_base $latest_tag -- <files>' (limit output), and Grep the checkout.
+Decide whether $latest_tag now lets an agent change a thread's model through t3_thread_send / 't3 thread send' (any field name or shape). Answer with 3 to 6 plain lines of evidence, then exactly one last line:
+VERDICT: <none|overlap|already_implemented|different_shape> | <one sentence>
+none = nothing related. overlap = same code changed, but no equivalent feature. already_implemented = same capability and same modelSelection field. different_shape = same capability, different field or behavior." \
+    | timeout 20m claude -p --model sonnet --max-turns 25 \
+        --allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*)" \
+        >"$review" 2>&1
+  verdict_line=$(grep -E '^VERDICT:' "$review" | tail -1)
+  log "review: ${verdict_line:-no verdict (see $review)}"
+  case "$verdict_line" in
+    "VERDICT: already_implemented"*|"VERDICT: different_shape"*)
+      upstream_has=1; reason="${verdict_line#VERDICT: }" ;;
+  esac
+else
+  [ "$upstream_has" = 0 ] && log "review skipped: claude CLI not found"
+fi
+
+if [ "$upstream_has" = 0 ]; then
+  for c in $patches; do
+    if ! git cherry-pick "$c" >>"$LOG" 2>&1; then
+      git cherry-pick --abort >/dev/null 2>&1
+      git checkout -q "$DAILY_BRANCH"; git branch -D "$next" >/dev/null 2>&1
+      die "re-applying your change onto $latest_tag conflicts. Installed app untouched. Rebase $DAILY_BRANCH by hand."
+    fi
+  done
+fi
+
+pnpm install --frozen-lockfile >>"$LOG" 2>&1 || { git checkout -q "$DAILY_BRANCH"; die "pnpm install failed on $latest_tag"; }
+if [ "$upstream_has" = 0 ]; then
+  # The agent-context budget grows by a fixed amount with the patch, so a mismatch is the
+  # only expected failure; anything else stops the swap.
+  node_modules/.bin/vp run check:changed >>"$LOG" 2>&1 || { git checkout -q "$DAILY_BRANCH"; die "checks failed on $latest_tag + your change. Installed app untouched. See $LOG"; }
+fi
+
+rm -rf release; export T3CODE_DESKTOP_VERSION="${latest_tag#v}"
+node_modules/.bin/vp run dist:desktop:linux >>"$LOG" 2>&1 || { git checkout -q "$DAILY_BRANCH"; die "AppImage build failed on $latest_tag. Installed app untouched. See $LOG"; }
+new=$(ls -t release/*.AppImage 2>/dev/null | head -1)
+[ -n "$new" ] && [ "$(stat -c %s "$new")" -gt 100000000 ] || { git checkout -q "$DAILY_BRANCH"; die "build produced no usable AppImage"; }
+
+bak="$APPIMAGE.bak-$(date +%Y%m%d-%H%M%S)"
+cp -p "$APPIMAGE" "$bak" && cp "$new" "$APPIMAGE.new" && chmod +x "$APPIMAGE.new" && mv -f "$APPIMAGE.new" "$APPIMAGE" \
+  || die "swap failed; backup is $bak"
+ls -t "$APPIMAGE".bak-* 2>/dev/null | tail -n +3 | xargs -r rm -f
+
+git branch -M "$next" "$DAILY_BRANCH" 2>/dev/null || { git branch -D "$DAILY_BRANCH" >/dev/null; git branch -m "$next" "$DAILY_BRANCH"; }
+if [ "$upstream_has" = 1 ]; then
+  notify "Updated to $latest_tag (stock, your change dropped): $reason. Check the skills still match. Review: $review"
+else
+  notify "Updated to $latest_tag with your model-switch change. Restart T3 to use it. Old app: $bak"
+fi
