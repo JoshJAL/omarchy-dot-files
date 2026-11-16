@@ -6,4 +6,4 @@ Type=oneshot
 ExecStart=%h/.local/bin/t3-fork-sync
 Nice=15
 IOSchedulingClass=idle
-TimeoutStartSec=2h
+TimeoutStartSec=8h

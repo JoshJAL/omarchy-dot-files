@@ -9,7 +9,13 @@
 #   - Upstream already has the modelSelection change -> build the stock tag, tell you.
 #   - Otherwise cherry-pick the patch commit(s) onto the tag, run the changed-file
 #     checks, build the AppImage, and swap it in (old one kept as .bak-*).
-# Any failure leaves the installed AppImage untouched and sends a notification.
+#   - With the patch applied it also builds the patched server runtime archive and rolls it
+#     onto the background service (t3code.service) here and on levine via t3-runtime-switch
+#     (waits for idle, up to T3_FORK_IDLE_DEADLINE secs, default 6 h), and stages it on
+#     swx-lt-dev without restarting. Remote hosts: T3_FORK_HOSTS. The AppImage swap and its
+#     notification never wait on the services; a runtime failure never undoes the swap.
+# Any failure before the swap leaves the installed AppImage and runtimes untouched and sends a
+# notification.
 set -uo pipefail
 
 REPO="${T3_FORK_REPO:-$HOME/Projects/personal/t3code}"           # clone with origin = pingdotgg/t3code
@@ -31,6 +37,7 @@ die() { notify "$1"; exit 1; }
 
 # Sign-in config check. pre: upstream still reads the four settings by these names (a rename
 # means our values would be ignored). post: the built bundles actually contain them.
+# runtime <dir>: the same two values are in the extracted server runtime's client/.
 verify_connect_config() {
   local stage="$1" names="T3CODE_CLERK_PUBLISHABLE_KEY T3CODE_CLERK_JWT_TEMPLATE T3CODE_CLERK_CLI_OAUTH_CLIENT_ID T3CODE_RELAY_URL" n
   if [ "$stage" = pre ]; then
@@ -38,12 +45,110 @@ verify_connect_config() {
       grep -rqs "$n" scripts/lib/public-config.ts apps/desktop/vite.config.ts \
         || { echo "upstream no longer reads $n"; return 1; }
     done
-  else
+  elif [ "$stage" = post ]; then
     grep -rqsF "$T3CODE_CLERK_PUBLISHABLE_KEY" apps/desktop/dist-electron apps/web/dist \
       || { echo "built app does not contain the Clerk key"; return 1; }
     grep -rqsF "$T3CODE_RELAY_URL" apps/web/dist apps/server/dist \
       || { echo "built app does not contain the relay URL"; return 1; }
+  else
+    grep -rqsF "$T3CODE_CLERK_PUBLISHABLE_KEY" "$2/client" \
+      || { echo "runtime does not contain the Clerk key"; return 1; }
+    grep -rqsF "$T3CODE_RELAY_URL" "$2/client" \
+      || { echo "runtime does not contain the relay URL"; return 1; }
   fi
+}
+
+# Server runtime build (cwd = $WORKTREE, patch applied, T3 Connect env exported, $WORK exists).
+# Needs the exact Node from package.json engines and two Arch stand-ins for Debian tools.
+# On failure sets rt_err and returns 1. Leaves the stamped package.json files for the caller to restore.
+rt_stamped="apps/server/package.json apps/desktop/package.json apps/web/package.json packages/contracts/package.json"
+build_runtime() {
+  local v nb
+  v=$(node -p "require('./package.json').engines.node" 2>>"$LOG")
+  [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { rt_err="package.json engines.node is not an exact version ('$v')"; return 1; }
+  mise install "node@$v" >>"$LOG" 2>&1 || { rt_err="cannot install node $v"; return 1; }
+  nb="$(mise where "node@$v")/bin"
+  mkdir -p "$WORK/shims" "$WORK/rm/linux-x64"
+  cat >"$WORK/shims/dpkg-query" <<'SHIM'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = "-S" ]; then pkg=$(pacman -Qqo "$2"); echo "$pkg:amd64: $2"
+elif [ "${1:-}" = "-W" ]; then name="${3%%:*}"; ver=$(pacman -Q "$name" | awk '{print $2}'); echo "$ver $name $ver"
+else echo "dpkg-query shim: unsupported $*" >&2; exit 2; fi
+SHIM
+  printf '#!/usr/bin/env bash\nexec uvx --quiet --from patchelf patchelf "$@"\n' >"$WORK/shims/patchelf"
+  chmod +x "$WORK/shims/dpkg-query" "$WORK/shims/patchelf"
+  local PATH="$nb:$WORK/shims:$WORKTREE/node_modules/.bin:$PATH"
+  # The server refuses to start unless its package.json version equals the runtime folder name.
+  node scripts/update-release-package-versions.ts "$rt_ver" >>"$LOG" 2>&1 || { rt_err="cannot stamp versions"; return 1; }
+  node_modules/.bin/vp run --filter t3 build >>"$LOG" 2>&1 || { rt_err="server build"; return 1; }
+  node apps/server/scripts/cli.ts build-exe >>"$LOG" 2>&1 || { rt_err="build-exe"; return 1; }
+  "$HOME/.cargo/bin/cargo" build --locked --release --manifest-path native/resource-monitor/Cargo.toml >>"$LOG" 2>&1 \
+    || { rt_err="resource monitor build"; return 1; }
+  cp native/resource-monitor/target/release/t3-resource-monitor "$WORK/rm/linux-x64/t3-resource-monitor" \
+    || { rt_err="resource monitor binary missing"; return 1; }
+  rm -rf release-cli
+  node scripts/build-cli-archive.ts --platform linux --arch x64 --version "$rt_ver" \
+    --resource-monitor-dir "$WORK/rm" --output-dir release-cli >>"$LOG" 2>&1 || { rt_err="archive build"; return 1; }
+  [ -s "release-cli/t3-$rt_ver-linux-x64.tar.gz" ] || { rt_err="no archive produced"; return 1; }
+}
+
+# Build gate: unpack the archive and probe it with a throwaway HOME (never the live T3 home).
+rt_gate() {
+  local ex="$WORK/extract" h="$WORK/home" out
+  rm -rf "$ex"; mkdir -p "$ex" "$h"
+  tar -xzf "$1" -C "$ex" --strip-components=1 || { echo "cannot unpack archive"; return 1; }
+  [ -x "$ex/t3" ] && [ -f "$ex/client/index.html" ] && [ -f "$ex/resource-monitor/linux-x64/t3-resource-monitor" ] \
+    || { echo "archive is missing t3, client/index.html or the resource monitor"; return 1; }
+  out=$(cd "$ex" && HOME="$h" T3CODE_HOME="$h/.t3" timeout 60 ./t3 --version 2>&1)
+  [ "$(printf '%s\n' "$out" | tail -1)" = "t3 v$rt_ver" ] || { echo "version is '$(printf '%s\n' "$out" | tail -1)', not 't3 v$rt_ver'"; return 1; }
+  out=$(cd "$ex" && HOME="$h" T3CODE_HOME="$h/.t3" timeout 60 ./t3 thread send --help 2>&1)
+  { grep -qF -- --model <<<"$out" && grep -qF -- --effort <<<"$out"; } \
+    || { echo "'t3 thread send --help' lacks --model or --effort"; return 1; }
+  verify_connect_config runtime "$ex"
+}
+
+# Roll-out helpers. rt_run prefixes every output line with the host name in the log.
+rt_run() { local h="$1"; shift; "$@" 2>&1 | sed -u "s/^/$h: /" >>"$LOG"; }
+# Push AppImage, archive and helper to host $1 and run the helper there ($2 = no-restart|default).
+# shellcheck disable=SC2329  # called through rt_run
+rt_remote() {
+  local h="$1" mode="$2" d; d=$(date +%Y%m%d-%H%M%S)
+  local sshopt=(-o BatchMode=yes -o ServerAliveInterval=60)
+  ssh "${sshopt[@]}" -n "$h" 'mkdir -p ~/.local/share/t3code ~/.local/state/t3-fork-sync/runtime ~/.local/bin' || return 1
+  scp -q "${sshopt[@]}" "$APPIMAGE" "$h:.local/share/t3code/T3-Code.AppImage.new" \
+    && scp -q "${sshopt[@]}" "$archive" "$h:.local/state/t3-fork-sync/runtime/" \
+    && scp -q "${sshopt[@]}" "$(command -v t3-runtime-switch)" "$h:.local/bin/t3-runtime-switch.new" || return 1
+  ssh "${sshopt[@]}" "$h" bash -s -- "$d" <<'REMOTE' || return 1
+set -e
+cd ~/.local/share/t3code
+chmod +x T3-Code.AppImage.new
+if [ -f T3-Code.AppImage ]; then cp -p T3-Code.AppImage "T3-Code.AppImage.bak-$1"; fi
+mv -f T3-Code.AppImage.new T3-Code.AppImage
+ls -t T3-Code.AppImage.bak-* 2>/dev/null | tail -n +3 | xargs -r rm -f
+cd ~/.local/state/t3-fork-sync/runtime
+ls -t t3-*.tar.gz 2>/dev/null | tail -n +3 | xargs -r rm -f
+chmod +x ~/.local/bin/t3-runtime-switch.new
+mv -f ~/.local/bin/t3-runtime-switch.new ~/.local/bin/t3-runtime-switch
+REMOTE
+  ssh "${sshopt[@]}" "$h" bash -s -- "$RT_DEADLINE" "$mode" "$(basename "$archive")" <<'REMOTE'
+f="$HOME/.local/state/t3-fork-sync/runtime/$3"
+if [ "$2" = no-restart ]; then T3_RUNTIME_SWITCH_DEADLINE="$1" exec "$HOME/.local/bin/t3-runtime-switch" --no-restart "$f"
+else T3_RUNTIME_SWITCH_DEADLINE="$1" exec "$HOME/.local/bin/t3-runtime-switch" "$f"; fi
+REMOTE
+}
+# One notify per host from the helper's exit code.
+rt_report() {
+  local h="$1" rc="$2" m
+  case "$rc" in
+    0) if [ "$3" = no-restart ]; then m="staged $rt_ver (service not restarted)"; else m="on $rt_ver"; fi ;;
+    3) m="staged, still waiting for idle past the deadline; service still on the old runtime" ;;
+    4) m="verification failed, rolled back to the previous runtime" ;;
+    5) m="a self-update is pending; untouched" ;;
+    6) m="FAILED after restart or rollback failed; check systemctl --user status t3code.service on $h now" ;;
+    *) m="failed (exit $rc; see $LOG)" ;;
+  esac
+  notify "Server runtime on $h: $m"
 }
 
 cd "$REPO" || die "repo missing: $REPO"
@@ -145,6 +250,25 @@ r=$(verify_connect_config post) || { git checkout -q "$DAILY_BRANCH"; die "T3 Co
 new=$(ls -t release/*.AppImage 2>/dev/null | head -1)
 [ -n "$new" ] && [ "$(stat -c %s "$new")" -gt 100000000 ] || { git checkout -q "$DAILY_BRANCH"; die "build produced no usable AppImage"; }
 
+# Server runtime (patched builds only). Built after the AppImage so the app build is unaffected;
+# stamped package.json files are always restored, before the branch rename below.
+archive=""
+if [ "$upstream_has" = 0 ]; then
+  WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
+  rt_ver="${latest_tag#v}+modelswitch.$(git rev-parse --short HEAD)"; rt_err=""
+  build_runtime; rt_rc=$?
+  # shellcheck disable=SC2086
+  git checkout -q -- $rt_stamped
+  [ "$rt_rc" = 0 ] || { git checkout -q "$DAILY_BRANCH"; die "runtime build failed ($rt_err). Installed app and runtimes untouched. See $LOG"; }
+  built="release-cli/t3-$rt_ver-linux-x64.tar.gz"
+  r=$(rt_gate "$built") || { git checkout -q "$DAILY_BRANCH"; die "runtime build gate failed: $r. Installed app and runtimes untouched. See $LOG"; }
+  mkdir -p "$STATE/runtime"
+  cp "$built" "$STATE/runtime/" || { git checkout -q "$DAILY_BRANCH"; die "cannot save runtime archive to $STATE/runtime. Installed app and runtimes untouched."; }
+  archive="$STATE/runtime/$(basename "$built")"
+  # shellcheck disable=SC2012  # same idiom as the AppImage backups below
+  ls -t "$STATE"/runtime/t3-*.tar.gz 2>/dev/null | tail -n +3 | xargs -r rm -f
+fi
+
 bak="$APPIMAGE.bak-$(date +%Y%m%d-%H%M%S)"
 cp -p "$APPIMAGE" "$bak" && cp "$new" "$APPIMAGE.new" && chmod +x "$APPIMAGE.new" && mv -f "$APPIMAGE.new" "$APPIMAGE" \
   || die "swap failed; backup is $bak"
@@ -152,7 +276,26 @@ ls -t "$APPIMAGE".bak-* 2>/dev/null | tail -n +3 | xargs -r rm -f
 
 git branch -M "$next" "$DAILY_BRANCH" 2>/dev/null || { git branch -D "$DAILY_BRANCH" >/dev/null; git branch -m "$next" "$DAILY_BRANCH"; }
 if [ "$upstream_has" = 1 ]; then
-  notify "Updated to $latest_tag (stock, your change dropped): $reason. Check the skills still match. Review: $review"
-else
-  notify "Updated to $latest_tag with your model-switch change. Restart T3 to use it. Old app: $bak"
+  notify "Updated to $latest_tag (stock, your change dropped): $reason. Check the skills still match. Review: $review. Background services stay on their current runtime; update them with the app's \"Update server\"."
+  exit 0
 fi
+notify "Updated to $latest_tag with your model-switch change. Restart T3 to use it. Old app: $bak"
+
+# Roll the runtime out. Each host runs concurrently so one host's idle wait (up to 6 h) never
+# delays the others; a failure here never undoes the AppImage swap.
+RT_DEADLINE="${T3_FORK_IDLE_DEADLINE:-21600}"
+rt_names=(local)
+( rt_run local env T3_RUNTIME_SWITCH_DEADLINE="$RT_DEADLINE" t3-runtime-switch "$archive"; rc=$?; rt_report local "$rc" default; exit "$rc" ) &
+rt_pids=($!)
+for h in ${T3_FORK_HOSTS-levine swx-lt-dev}; do
+  ssh -o BatchMode=yes -o ConnectTimeout=10 "$h" true </dev/null >>"$LOG" 2>&1 || { log "skip $h: unreachable"; continue; }
+  mode=default; [ "$h" = swx-lt-dev ] && mode=no-restart
+  ( rt_run "$h" rt_remote "$h" "$mode"; rc=$?; rt_report "$h" "$rc" "$mode"; exit "$rc" ) &
+  rt_pids+=($!); rt_names+=("$h")
+done
+rt_fail=0
+for i in "${!rt_pids[@]}"; do
+  wait "${rt_pids[$i]}"; rc=$?
+  case "$rc" in 0|3|5) ;; *) rt_fail=1; log "runtime roll-out on ${rt_names[$i]} exited $rc" ;; esac
+done
+exit "$rt_fail"

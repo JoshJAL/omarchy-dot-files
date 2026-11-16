@@ -1,0 +1,408 @@
+#!/usr/bin/env bash
+# t3-runtime-switch: install a patched T3 server runtime archive into the background
+# service's runtime dir, switch the service to it once no turn is running, verify, and
+# roll back on failure. Only touches runtime/versions/<ver>+modelswitch.* dirs and the
+# activeVersion field of runtime/service-state.json. Reads userdata strictly read-only.
+#
+# Usage:
+#   t3-runtime-switch [--wait-idle] [--deadline SECS] [--home DIR] ARCHIVE
+#   t3-runtime-switch --no-restart [--home DIR] ARCHIVE
+#   t3-runtime-switch --rollback [--to VERSION] [--deadline SECS] [--home DIR]
+#
+# Exit codes:
+#   0  switched and verified (or already running it healthy, or staged with --no-restart)
+#   1  error before anything was switched (or the switch was undone before any restart)
+#   2  usage
+#   3  idle deadline passed: runtime installed and staged, service left as it was
+#   4  verification failed and the service was rolled back to the previous runtime
+#   5  a self-update is pending in service-state.json: aborted, nothing changed
+#   6  failure after a restart, or rollback failed/blocked: look at the service now
+#
+# A run row stuck in a busy status makes --wait-idle wait out the full deadline (exit 3).
+# Env: T3CODE_HOME (default ~/.t3), T3_RUNTIME_SWITCH_DEADLINE (secs, default 21600),
+#      T3_SERVICE_UNIT (default t3code.service).
+set -euo pipefail
+trap '' HUP   # an ssh drop must not abort a switch half-way
+
+PROG=t3-runtime-switch
+MODE=switch
+RESTART=1
+ROLLBACK_TO=""
+ARCHIVE=""
+T3_HOME="${T3CODE_HOME:-$HOME/.t3}"
+DEADLINE="${T3_RUNTIME_SWITCH_DEADLINE:-21600}"
+UNIT="${T3_SERVICE_UNIT:-t3code.service}"
+POLL=30
+BUSY_STATUSES="'queued','preparing','starting','running','waiting'"
+PATCH_RE='^[0-9]+\.[0-9]+\.[0-9]+\+modelswitch\.[0-9a-f]+$'
+VERSION_RE='^[0-9A-Za-z][0-9A-Za-z.+_-]*$'
+
+log() { printf '%s %s: %s\n' "$(date '+%F %T')" "$PROG" "$*" >&2; }
+die() { log "ERROR: $*"; exit "${2:-1}"; }
+usage() { sed -n '7,10p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+need_arg() { [ $# -ge 2 ] && [ -n "$2" ] || { log "$1 needs a value"; usage; }; }
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --wait-idle) RESTART=1 ;;
+    --no-restart) RESTART=0 ;;
+    --rollback) MODE=rollback ;;
+    --to) need_arg "$@"; ROLLBACK_TO="$2"; shift ;;
+    --deadline) need_arg "$@"; DEADLINE="$2"; shift ;;
+    --home) need_arg "$@"; T3_HOME="$2"; shift ;;
+    -h|--help) usage ;;
+    -*) log "unknown flag $1"; usage ;;
+    *) [ -z "$ARCHIVE" ] || usage; ARCHIVE="$1" ;;
+  esac
+  shift
+done
+[[ "$DEADLINE" =~ ^[0-9]+$ ]] || { log "--deadline must be whole seconds"; usage; }
+[ -z "$ROLLBACK_TO" ] || [[ "$ROLLBACK_TO" =~ $VERSION_RE ]] || { log "bad --to version"; usage; }
+[ "$MODE" = rollback ] || [ -n "$ARCHIVE" ] || usage
+for cmd in jq tar flock sqlite3 curl timeout realpath; do command -v "$cmd" >/dev/null || die "$cmd is required"; done
+[ "$RESTART" = 0 ] || command -v systemctl >/dev/null || die "systemctl is required"
+
+T3_HOME=$(realpath -- "$T3_HOME")
+RUNTIME="$T3_HOME/runtime"
+VERSIONS="$RUNTIME/versions"
+STATE="$RUNTIME/service-state.json"
+BACKUP="$STATE.pre-switch"
+USERDATA="$T3_HOME/userdata"
+DB="$USERDATA/statev2.sqlite"
+SRV_RUNTIME="$USERDATA/server-runtime.json"
+BOOT_LOG="$USERDATA/logs/boot-service.log"
+[ -f "$STATE" ] || die "no $STATE (is the background service installed here?)"
+[ -d "$VERSIONS" ] || die "no $VERSIONS"
+
+exec 9>"$RUNTIME/.t3-runtime-switch.lock"   # closed (9>&-) for anything that may outlive us
+flock -n 9 || die "another $PROG is running (lock $RUNTIME/.t3-runtime-switch.lock)"
+
+# Exit guard: PHASE=staged means state points at the new version but no restart yet;
+# PHASE=restarted means a restart happened and the outcome is not settled.
+PHASE=none; PREV=""; TMP_STATE=""
+# shellcheck disable=SC2329  # invoked by the EXIT trap
+on_exit() {
+  local rc=$?
+  [ -z "$TMP_STATE" ] || rm -f -- "$TMP_STATE"
+  case "$PHASE" in
+    staged)
+      log "interrupted before restart; restoring activeVersion $PREV"
+      # shellcheck disable=SC2015  # either step failing should log
+      jq --arg v "$PREV" '.activeVersion = $v' "$STATE" >"$STATE.tmp.exit" && mv -f "$STATE.tmp.exit" "$STATE" \
+        || log "could not restore activeVersion; set it to $PREV by hand"
+      [ "$rc" = 0 ] && rc=1 ;;
+    restarted)
+      log "stopped after a restart without a verified result (rc $rc); check systemctl --user status $UNIT and $PROG --rollback"
+      rc=6 ;;
+  esac
+  exit "$rc"
+}
+trap on_exit EXIT
+trap 'exit 130' INT TERM
+
+active_version() { jq -er '.activeVersion' "$STATE"; }
+installed() { [ -f "$VERSIONS/$1/t3" ] && [ "$(tr -d '[:space:]' <"$VERSIONS/$1/.install-complete" 2>/dev/null)" = "$1" ]; }
+
+# --- service facts -----------------------------------------------------------------
+server_pid() { jq -r '.pid // empty' "$SRV_RUNTIME" 2>/dev/null || true; }
+server_origin() { jq -r '.origin // empty' "$SRV_RUNTIME" 2>/dev/null || true; }
+server_alive() { local p; p=$(server_pid); [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
+running_version() { # version dir of the live server process, or empty
+  local p; p=$(server_pid); [ -n "$p" ] || return 0
+  tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null | sed -n 's#.*/versions/\([^/ ]*\)/t3 serve.*#\1#p' || true
+}
+log_size() { stat -c %s "$BOOT_LOG" 2>/dev/null || echo 0; }
+relay_line="Relay client tunnel connection registered"
+
+# --- idle ---------------------------------------------------------------------------
+busy_runs() {
+  # Read-only: never open the live database read-write.
+  if [ ! -f "$DB" ]; then
+    if server_alive; then die "server is running but $DB is missing; cannot tell whether a turn is running"; fi
+    echo 0; return
+  fi
+  local n
+  n=$(sqlite3 -readonly "file:$DB?mode=ro" \
+    "select count(*) from orchestration_v2_projection_runs where status in ($BUSY_STATUSES);") \
+    || die "idle query failed on $DB"
+  echo "$n"
+}
+idle_now() { # two reads 3s apart, so a just-accepted turn has time to reach the projection
+  local n
+  n=$(busy_runs) || exit $?   # callers sit in conditions, where set -e is off
+  [ "$n" = 0 ] || return 1
+  sleep 3
+  n=$(busy_runs) || exit $?
+  [ "$n" = 0 ]
+}
+wait_for_idle() { # $1 = what for; returns 1 at deadline
+  local start n
+  start=$(date +%s)
+  while :; do
+    n=$(busy_runs) || exit $?
+    if [ "$n" = 0 ] && idle_now; then return 0; fi
+    if [ $(( $(date +%s) - start )) -ge "$DEADLINE" ]; then
+      log "run(s) still in progress after ${DEADLINE}s; giving up waiting to $1"
+      return 1
+    fi
+    log "$n run(s) in progress; waiting to $1 (deadline ${DEADLINE}s)"
+    sleep "$POLL"
+  done
+}
+
+# --- state file ---------------------------------------------------------------------
+# Mirrors the launcher's decodeServiceState: a finished update record must agree with
+# activeVersion, or the launcher rejects the whole file and the service crash-loops.
+# Such a record is history only, so it is dropped (the backup keeps it); pending is never touched.
+state_accepts() { # $1 = candidate activeVersion; prints "drop" when the finished record must go
+  local want="$1" st from to
+  st=$(jq -r '.update.status // ""' "$STATE")
+  from=$(jq -r '.update.fromVersion // ""' "$STATE"); to=$(jq -r '.update.targetVersion // ""' "$STATE")
+  case "$st" in
+    "") ;;
+    pending) die "a self-update is pending in $STATE; not touching it" 5 ;;
+    committed) [ "$to" = "$want" ] || echo drop ;;
+    rolled-back|failed) [ "$from" = "$want" ] || echo drop ;;
+    *) die "unknown update status '$st' in $STATE; not touching it" ;;
+  esac
+}
+set_active_version() { # atomic rewrite of activeVersion only
+  local want="$1"
+  installed "$want" || die "refusing to point the service at $want: not a complete install"
+  local drop
+  drop=$(state_accepts "$want") || exit $?
+  TMP_STATE=$(mktemp "$STATE.tmp.XXXXXX")
+  if [ "$drop" = drop ]; then
+    log "dropping the finished update record $(jq -c .update "$STATE") (kept in the backup)"
+    jq --arg v "$want" '.activeVersion = $v | del(.update)' "$STATE" >"$TMP_STATE"
+  else
+    jq --arg v "$want" '.activeVersion = $v' "$STATE" >"$TMP_STATE"
+  fi
+  # shellcheck disable=SC2015  # die when any part fails
+  [ "$(jq -S 'del(.activeVersion, .update)' "$STATE")" = "$(jq -S 'del(.activeVersion, .update)' "$TMP_STATE")" ] \
+    && { [ "$drop" = drop ] || [ "$(jq -S .update "$STATE")" = "$(jq -S .update "$TMP_STATE")" ]; } \
+    || die "refusing write: more than activeVersion (and a finished update record) would change"
+  chmod --reference="$STATE" "$TMP_STATE"
+  sync "$TMP_STATE"
+  mv -f "$TMP_STATE" "$STATE"; TMP_STATE=""
+  sync "$RUNTIME" 2>/dev/null || true
+}
+
+restore_or_set() { # back to $1: restore the pre-switch backup byte for byte when it is for $1
+  local prev="$1"
+  if [ -f "$BACKUP" ] && [ "$(jq -r '.activeVersion // ""' "$BACKUP")" = "$prev" ] \
+     && [ "$(jq -S 'del(.activeVersion, .update)' "$BACKUP")" = "$(jq -S 'del(.activeVersion, .update)' "$STATE")" ] \
+     && [ "$(jq -r '.update.status // ""' "$STATE")" != pending ]; then
+    installed "$prev" || die "refusing to point the service at $prev: not a complete install"
+    TMP_STATE=$(mktemp "$STATE.tmp.XXXXXX")
+    cp -p "$BACKUP" "$TMP_STATE"; sync "$TMP_STATE"
+    mv -f "$TMP_STATE" "$STATE"; TMP_STATE=""
+    sync "$RUNTIME" 2>/dev/null || true
+    log "restored $STATE from $BACKUP (activeVersion $prev)"
+  else
+    set_active_version "$prev"
+    log "activeVersion -> $prev"
+  fi
+}
+
+# --- restart + verify ----------------------------------------------------------------
+server_up() { # $1 = version, $2 = old pid; prints the new pid when healthy
+  local pid origin code
+  pid=$(server_pid); origin=$(server_origin)
+  [ -n "$pid" ] && [ "$pid" != "$2" ] && kill -0 "$pid" 2>/dev/null || return 1
+  [ "$(running_version)" = "$1" ] || return 1
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$origin/.well-known/t3/environment" || true)
+  [ "$code" = 200 ] || return 1
+  echo "$pid"
+}
+
+restart_and_verify() { # $1 = version, $2 = old pid; returns 0 healthy, 1 up but unhealthy, 2 down
+  local want="$1" old="$2" offset pid="" i relay=0 size restarts0
+  grep -qsF "$relay_line" "$BOOT_LOG" && relay=1
+  offset=$(log_size)
+  log "restarting $UNIT onto $want (old server pid ${old:-none})"
+  systemctl --user reset-failed "$UNIT" 9>&- 2>/dev/null || true   # a crash loop must not block this start
+  systemctl --user restart "$UNIT" 9>&- || log "systemctl restart returned non-zero; checking the server anyway"
+  restarts0=$(systemctl --user show -p NRestarts --value "$UNIT" 2>/dev/null || echo 0)
+  for i in $(seq 1 60); do
+    pid=$(server_up "$want" "$old") && break; pid=""
+    # Fail fast on a crash loop instead of letting systemd burn its start limit.
+    if systemctl --user is-failed --quiet "$UNIT" 2>/dev/null \
+       || [ "$(systemctl --user show -p NRestarts --value "$UNIT" 2>/dev/null || echo 0)" != "$restarts0" ]; then
+      log "$UNIT crashed after the restart (see $BOOT_LOG)"; break
+    fi
+    sleep 2
+  done
+  if [ -z "$pid" ]; then
+    log "server did not come up healthy on $want"
+    log "server-runtime.json: $(jq -c '{pid,port,serverVersion}' "$SRV_RUNTIME" 2>/dev/null || echo missing)"
+    if server_alive; then return 1; else return 2; fi
+  fi
+  log "server pid $pid runs $VERSIONS/$want/t3 serve; /.well-known/t3/environment returned 200"
+  if [ "$relay" = 1 ]; then
+    for i in $(seq 1 45); do
+      size=$(log_size); [ "$size" -ge "$offset" ] || offset=0   # log was truncated or rotated
+      if tail -c +"$((offset + 1))" "$BOOT_LOG" 2>/dev/null | grep -cF "$relay_line" >/dev/null; then break; fi
+      [ "$i" = 45 ] && { log "relay tunnel did not re-register within 90s"; return 1; }
+      sleep 2
+    done
+    log "relay tunnel re-registered"
+  else
+    log "relay never registered on this machine before; skipping relay check"
+  fi
+  return 0
+}
+
+roll_back_to() { # $1 = version to return to, $2 = reason (down|unhealthy|requested)
+  local prev="$1" why="$2" old
+  installed "$prev" || die "cannot roll back: $prev is not installed" 6
+  [ "$why" = down ] && server_alive && why=unhealthy   # a live process may be serving a turn
+  while :; do
+    if [ "$why" != down ]; then
+      wait_for_idle "roll back to $prev" || die "rollback to $prev waits for idle; service left on $(running_version). Rerun: $PROG --rollback --to $prev" 6
+    fi
+    old=$(server_pid)
+    restore_or_set "$prev"
+    { [ "$why" = down ] || idle_now; } && break
+    log "a run started; waiting again before rolling back"
+  done
+  restart_and_verify "$prev" "$old" || die "rollback to $prev did not verify; check systemctl --user status $UNIT now" 6
+}
+
+# --- install -------------------------------------------------------------------------
+probe_t3() { # $1 = t3 path, rest = args; runs it in a throwaway home so it cannot touch the live one
+  local bin="$1" h out; shift
+  h=$(mktemp -d)
+  out=$(HOME="$h" T3CODE_HOME="$h/.t3" timeout 60 "$bin" "$@" </dev/null 2>&1 9>&- || true)
+  rm -rf -- "$h"
+  printf '%s\n' "$out"
+}
+# The server exits unless its build version equals the folder the launcher started it from.
+version_matches() { [ "$(probe_t3 "$2/t3" --version | tail -n 1)" = "t3 v$1" ]; }
+install_archive() { # prints the version
+  local archive="$1" ver base strip partial members help d
+  [ -f "$archive" ] || die "no archive $archive"
+  base=$(basename "$archive")
+  ver=${base#t3-}; ver=${ver%-linux-x64.tar.gz}
+  [[ "$ver" =~ $PATCH_RE ]] || die "archive name $base does not look like t3-<x.y.z>+modelswitch.<sha>-linux-x64.tar.gz"
+  if installed "$ver"; then
+    if version_matches "$ver" "$VERSIONS/$ver"; then log "$ver already installed"; echo "$ver"; return; fi
+    [ "$ver" != "$(active_version)" ] && [ "$ver" != "$(running_version)" ] \
+      || die "$VERSIONS/$ver is in use but its t3 --version is not $ver; roll back first"
+    log "$VERSIONS/$ver holds a different build (t3 --version mismatch); reinstalling"
+  fi
+  [ "$ver" != "$(active_version)" ] || die "$ver is active but not a complete install; fix by hand ($PROG --rollback --to <stock>)"
+  members=$(tar -tzf "$archive") || die "cannot list $archive"
+  if grep -qxE '(\./)?t3' <<<"$members"; then strip=0
+  elif grep -qE '^[^/]+/t3$' <<<"$members"; then strip=1
+  else die "archive has no t3 executable at its root"; fi
+  partial="$VERSIONS/$ver.partial"
+  rm -rf -- "$partial" "${VERSIONS:?}/$ver"   # both are +modelswitch paths, never stock, never active
+  mkdir -m 700 -- "$partial"
+  tar -xzf "$archive" -C "$partial" --strip-components="$strip" --no-same-owner
+  for d in t3 client/index.html lib node_modules resource-monitor; do
+    [ -e "$partial/$d" ] || { rm -rf -- "$partial"; die "archive is missing $d"; }
+  done
+  version_matches "$ver" "$partial" \
+    || { rm -rf -- "$partial"; die "t3 --version in the archive is not v$ver; build with package versions stamped to $ver"; }
+  help=$(probe_t3 "$partial/t3" thread send --help)
+  grep -qF -- '--model' <<<"$help" || { rm -rf -- "$partial"; die "$ver's t3 thread send has no --model; not the patched server"; }
+  printf '%s\n' "$ver" >"$partial/.install-complete"
+  sync -f "$partial/.install-complete" 2>/dev/null || true
+  mv -T -- "$partial" "$VERSIONS/$ver"
+  log "installed $VERSIONS/$ver"
+  echo "$ver"
+}
+
+prune() { # keep: active, the backup's version, the running server's version; never non-patched dirs
+  local keep_a keep_b keep_c d v
+  keep_a=$(active_version); keep_b=$(jq -r '.activeVersion // ""' "$BACKUP" 2>/dev/null || true)
+  keep_c=$(running_version)
+  for d in "$VERSIONS"/*; do
+    [ -d "$d" ] || continue
+    v=$(basename "$d"); v=${v%.partial}
+    [[ "$v" =~ $PATCH_RE ]] || continue
+    [ "$v" = "$keep_a" ] && continue   # active: never, not even a stray .partial beside it
+    if [ "$d" = "$VERSIONS/$v" ] && { [ "$v" = "$keep_b" ] || [ "$v" = "$keep_c" ]; }; then continue; fi
+    log "pruning $d"
+    rm -rf -- "$d"
+  done
+}
+
+# --- main ----------------------------------------------------------------------------
+[ "$(jq -r '.update.status // ""' "$STATE")" != pending ] || die "a self-update is pending in $STATE; not touching it" 5
+
+if [ "$MODE" = rollback ]; then
+  target="${ROLLBACK_TO:-$(jq -r '.activeVersion // ""' "$BACKUP" 2>/dev/null || true)}"
+  [ -n "$target" ] || die "no $BACKUP and no --to VERSION; nothing to roll back to"
+  [[ "$target" =~ $VERSION_RE ]] || die "bad version in $BACKUP"
+  if [ "$RESTART" = 0 ]; then
+    [ "$target" != "$(active_version)" ] || die "$target is already active"
+    set_active_version "$target"; log "activeVersion -> $target (no restart)"; exit 0
+  fi
+  [ "$target" != "$(running_version)" ] || die "the server already runs $target"
+  roll_back_to "$target" requested
+  log "rolled back to $target"
+  exit 0
+fi
+
+VER=$(install_archive "$ARCHIVE")
+PREV=$(active_version)
+[ "$PREV" = "$VER" ] || state_accepts "$VER" >/dev/null
+
+if [ "$RESTART" = 0 ]; then
+  if [ "$PREV" != "$VER" ]; then
+    cp -p "$STATE" "$BACKUP"
+    set_active_version "$VER"
+    log "activeVersion $PREV -> $VER (no restart; takes effect when $UNIT next starts)"
+  else
+    log "$VER is already the active version (no restart)"
+  fi
+  prune; exit 0
+fi
+
+systemctl --user is-active --quiet "$UNIT" || die "$UNIT is not active here; use --no-restart to stage only"
+RUNNING=$(running_version)
+if [ "$PREV" = "$VER" ]; then
+  if [ "$RUNNING" = "$VER" ] && pid=$(server_up "$VER" ""); then
+    log "server pid $pid already runs $VER and is healthy"; prune; exit 0
+  fi
+  # Staged earlier with --no-restart but never started: switch from what is really running.
+  # shellcheck disable=SC2015  # die on either check failing
+  [ -n "$RUNNING" ] && installed "$RUNNING" || die "$VER is staged but the server's running version (${RUNNING:-unknown}) is not a complete install"
+  log "$VER is staged but the server runs $RUNNING; switching from $RUNNING"
+  PREV="$RUNNING"
+  set_active_version "$PREV"
+fi
+installed "$PREV" || die "current activeVersion $PREV is not a complete install; refusing to switch away from an unrestorable state"
+
+while :; do
+  wait_for_idle "switch to $VER" || { log "$VER is installed and staged; service still on $PREV"; exit 3; }
+  cp -p "$STATE" "$BACKUP"
+  OLD_PID=$(server_pid)
+  PHASE=staged
+  set_active_version "$VER"
+  # Re-check immediately before the restart; a turn that started meanwhile wins.
+  idle_now && break
+  log "a run started during the switch; restoring $PREV and waiting again"
+  set_active_version "$PREV"
+  PHASE=none
+done
+
+# The new server prunes runtimes on start, sparing ones whose sentinel is under an hour old;
+# refresh PREV's so a rollback target survives the verify window (content is unchanged).
+touch -c -- "$VERSIONS/$PREV/.install-complete"
+PHASE=restarted
+rc=0; restart_and_verify "$VER" "$OLD_PID" || rc=$?
+if [ "$rc" = 0 ]; then
+  PHASE=none
+  log "switched $PREV -> $VER and verified"
+  prune
+  exit 0
+fi
+why=unhealthy; [ "$rc" = 2 ] && why=down
+log "verification failed ($why); rolling back to $PREV"
+roll_back_to "$PREV" "$why"
+PHASE=none
+log "rolled back to $PREV; $VER stays installed for inspection"
+exit 4
