@@ -65,7 +65,23 @@ dotfiles() {
 # ~/.gitignore is deny-by-default, so tracking a NEW file needs -f. Already-tracked
 # files are unaffected by gitignore and keep working with plain `dotfiles add`.
 alias dotfiles-track='git --git-dir=$HOME/.dotfiles --work-tree=$HOME add -f'
-alias agentfiles='git --git-dir=$HOME/.agentfiles --work-tree=$HOME'
+# agentfiles: same as the old alias, except `agentfiles push` hides GitHub's "Bypassed rule
+# violations" notice (the owner's admin bypass on the protect-main ruleset; it is not an error).
+# Everything else, and the push's exit status, is untouched.
+agentfiles() {
+  local -a g=(git --git-dir="$HOME/.agentfiles" --work-tree="$HOME")
+  if [[ $1 == push ]]; then
+    local rc
+    { "${g[@]}" "$@" 2>&1 1>&3 3>&- | awk '
+      /^remote: *$/ && !skip { if (held) print held; held = $0; next }
+      /^remote: Bypassed rule violations/ { held = ""; skip = 1; next }
+      skip && (/^remote: *$/ || /^remote: - /) { next }
+      { skip = 0; if (held) print held; held = ""; print }
+      END { if (held) print held }' >&2; rc=${PIPESTATUS[0]}; } 3>&1
+    return $rc
+  fi
+  "${g[@]}" "$@"
+}
 alias agentfiles-track='git --git-dir=$HOME/.agentfiles --work-tree=$HOME add -f'
 
 # mise: never hold back a release for being "too new".
