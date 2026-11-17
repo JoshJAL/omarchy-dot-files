@@ -2,7 +2,7 @@
 # Keeps the patched T3 desktop app on the newest stable release.
 #
 # Daily (systemd timer) or by hand:  t3-fork-sync [--check|--force]
-#   --check  report only; change nothing
+#   --check  report only; change nothing (never rolls out)
 #   --force  rebuild even when no new stable release exists
 #
 # New stable tag vX.Y.Z exists?
@@ -16,13 +16,31 @@
 #     notification never wait on the services; a runtime failure never undoes the swap.
 # Any failure before the swap leaves the installed AppImage and runtimes untouched and sends a
 # notification.
+#
+# No new stable release (branch already contains the newest tag): nightly re-check. The newest
+# patched archive for that tag is pushed to every host that lacks it and run there with
+# `t3-runtime-switch --recheck` (no AppImage push, no build). The helper does nothing and the
+# script stays quiet when the host is paused by a manual rollback (exit 10), already current
+# (11) or on a newer release line (12); only a real re-patch (0) or a problem notifies. This
+# covers "Update server" to stock, an expired idle deadline, an offline host or hand-installed stock.
+#
+# Stock archive: after every successful build, and in the re-check when it is missing, the
+# official t3-<ver>-linux-x64.tar.gz of the newest tag is downloaded from the GitHub release,
+# checked against the release's SHA256SUMS and kept (2 newest) in $STATE/runtime/stock/, then
+# pushed to each host for `t3-runtime-switch --rollback --archive`. A failure only notifies.
+#
+# Test-only overrides (defaults unchanged when unset):
+#   T3_FORK_STATE          state folder (default ~/.local/state/t3-fork-sync)
+#   T3_FORK_REMOTE_ROOT    folder standing in for ~ on remote hosts (default ~; absolute path)
+#   T3_FORK_REMOTE_T3HOME  passed to the remote helper as --home (local helper: use T3CODE_HOME)
+#   T3_FORK_SKIP_REVIEW=1  skip the read-only Claude review step
 set -uo pipefail
 
 REPO="${T3_FORK_REPO:-$HOME/Projects/personal/t3code}"           # clone with origin = pingdotgg/t3code
 WORKTREE="${T3_FORK_WORKTREE:-$HOME/Projects/personal/t3code-daily}"
 DAILY_BRANCH="${T3_FORK_DAILY_BRANCH:-daily/stable-modelswitch}"
 APPIMAGE="${T3_FORK_APPIMAGE:-$HOME/.local/share/t3code/T3-Code.AppImage}"
-STATE="$HOME/.local/state/t3-fork-sync"
+STATE="${T3_FORK_STATE:-$HOME/.local/state/t3-fork-sync}"
 LOG="$STATE/sync.log"
 MODE="${1:-run}"
 
@@ -108,40 +126,108 @@ rt_gate() {
   verify_connect_config runtime "$ex"
 }
 
+# Official stock archive for tag $1 -> $STATE/runtime/stock/, checked against the release's
+# SHA256SUMS; keeps the 2 newest. A failure only notifies (returns 1); callers never stop on it.
+fetch_stock() {
+  local v="${1#v}" dir="$STATE/runtime/stock" name base tmp want got err=""
+  name="t3-$v-linux-x64.tar.gz"
+  base="https://github.com/pingdotgg/t3code/releases/download/v$v"
+  [ -s "$dir/$name" ] && return 0
+  mkdir -p "$dir" || { notify "Stock archive for $1 not saved: cannot create $dir"; return 1; }
+  tmp=$(mktemp -d "$dir/.fetch.XXXXXX") || { notify "Stock archive for $1 not saved: cannot create a temp folder in $dir"; return 1; }
+  if ! curl -fsSL -o "$tmp/$name" "$base/$name" >>"$LOG" 2>&1; then err="download of $name failed"
+  elif ! curl -fsSL -o "$tmp/SHA256SUMS" "$base/SHA256SUMS" >>"$LOG" 2>&1; then err="download of SHA256SUMS failed"
+  else
+    want=$(awk -v n="$name" '{f=$2; sub(/^\*/, "", f)} f==n {print $1; exit}' "$tmp/SHA256SUMS")
+    got=$(sha256sum "$tmp/$name" | awk '{print $1}')
+    if [ -z "$want" ]; then err="$name is not listed in SHA256SUMS"
+    elif [ "$want" != "$got" ]; then err="sha256 mismatch for $name"
+    elif ! mv -f "$tmp/$name" "$dir/$name"; then err="cannot move it into $dir"
+    fi
+  fi
+  rm -rf "$tmp"
+  if [ -n "$err" ]; then notify "Stock archive for $1 not saved: $err. Rollback to stock needs it; the sync carries on."; return 1; fi
+  find "$dir" -maxdepth 1 -name 't3-*-linux-x64.tar.gz' | sort -V | head -n -2 | xargs -r rm -f
+  log "stock archive saved: $dir/$name"
+}
+
 # Roll-out helpers. rt_run prefixes every output line with the host name in the log.
 rt_run() { local h="$1"; shift; "$@" 2>&1 | sed -u "s/^/$h: /" >>"$LOG"; }
-# Push AppImage, archive and helper to host $1 and run the helper there ($2 = no-restart|default).
+# Put the runtime on host $1 and run the helper there. $2 = no-restart|default (helper flag);
+# $3 = full|recheck. full: push AppImage, archive, stock archive, helper. recheck: push the archive
+# only when missing, plus the stock archive and helper; no AppImage; helper runs with --recheck.
+# ssh joins its arguments into one command line, so no remote argument may be empty ("-" = none).
+# Every remote path is under T3_FORK_REMOTE_ROOT (default ~, i.e. the remote home); the helper gets
+# --home $T3_FORK_REMOTE_T3HOME when that is set.
 # shellcheck disable=SC2329  # called through rt_run
 rt_remote() {
-  local h="$1" mode="$2" d; d=$(date +%Y%m%d-%H%M%S)
+  local h="$1" mode="$2" rmode="${3:-full}" d; d=$(date +%Y%m%d-%H%M%S)
   local sshopt=(-o BatchMode=yes -o ServerAliveInterval=60)
-  ssh "${sshopt[@]}" -n "$h" 'mkdir -p ~/.local/share/t3code ~/.local/state/t3-fork-sync/runtime ~/.local/bin' || return 1
-  scp -q "${sshopt[@]}" "$APPIMAGE" "$h:.local/share/t3code/T3-Code.AppImage.new" \
-    && scp -q "${sshopt[@]}" "$archive" "$h:.local/state/t3-fork-sync/runtime/" \
-    && scp -q "${sshopt[@]}" "$(command -v t3-runtime-switch)" "$h:.local/bin/t3-runtime-switch.new" || return 1
-  ssh "${sshopt[@]}" "$h" bash -s -- "$d" <<'REMOTE' || return 1
-set -e
-cd ~/.local/share/t3code
-chmod +x T3-Code.AppImage.new
-if [ -f T3-Code.AppImage ]; then cp -p T3-Code.AppImage "T3-Code.AppImage.bak-$1"; fi
-mv -f T3-Code.AppImage.new T3-Code.AppImage
-ls -t T3-Code.AppImage.bak-* 2>/dev/null | tail -n +3 | xargs -r rm -f
-cd ~/.local/state/t3-fork-sync/runtime
-ls -t t3-*.tar.gz 2>/dev/null | tail -n +3 | xargs -r rm -f
-chmod +x ~/.local/bin/t3-runtime-switch.new
-mv -f ~/.local/bin/t3-runtime-switch.new ~/.local/bin/t3-runtime-switch
+  local root="${T3_FORK_REMOTE_ROOT:-~}" t3home="${T3_FORK_REMOTE_T3HOME:-}" sroot="" stock_name="" have pushed=0
+  local tl='~'
+  case "$root" in "$tl"|"$tl/") ;; "$tl/"*) sroot="${root#"$tl"/}/" ;; *) sroot="$root/" ;; esac   # scp path prefix
+  [ -n "${stock_file:-}" ] && stock_name=$(basename "$stock_file")
+  local rrun="${sroot}.local/state/t3-fork-sync/runtime"
+  # Make the folders and report what the host already has.
+  have=$(ssh "${sshopt[@]}" "$h" bash -s -- "$root" "$(basename "$archive")" "${stock_name:--}" <<'REMOTE'
+root=$1; root=${root/#\~/$HOME}
+r="$root/.local/state/t3-fork-sync/runtime"
+mkdir -p "$root/.local/share/t3code" "$r/stock" "$root/.local/bin" || exit 1
+[ -f "$r/$2" ] && echo archive
+if [ "$3" != - ] && [ -f "$r/stock/$3" ]; then echo stock; fi
+exit 0
 REMOTE
-  ssh "${sshopt[@]}" "$h" bash -s -- "$RT_DEADLINE" "$mode" "$(basename "$archive")" <<'REMOTE'
-f="$HOME/.local/state/t3-fork-sync/runtime/$3"
-if [ "$2" = no-restart ]; then T3_RUNTIME_SWITCH_DEADLINE="$1" exec "$HOME/.local/bin/t3-runtime-switch" --no-restart "$f"
-else T3_RUNTIME_SWITCH_DEADLINE="$1" exec "$HOME/.local/bin/t3-runtime-switch" "$f"; fi
+  ) || return 1
+  if [ "$rmode" = full ]; then
+    scp -q "${sshopt[@]}" "$APPIMAGE" "$h:${sroot}.local/share/t3code/T3-Code.AppImage.new" || return 1
+  fi
+  if [ "$rmode" = full ] || ! grep -qx archive <<<"$have"; then
+    scp -q "${sshopt[@]}" "$archive" "$h:$rrun/" || return 1
+    pushed=1
+  fi
+  if [ -n "$stock_name" ] && ! grep -qx stock <<<"$have"; then
+    scp -q "${sshopt[@]}" "$stock_file" "$h:$rrun/stock/" || return 1
+  fi
+  scp -q "${sshopt[@]}" "$(command -v t3-runtime-switch)" "$h:${sroot}.local/bin/t3-runtime-switch.new" || return 1
+  ssh "${sshopt[@]}" "$h" bash -s -- "$d" "$root" "$rmode" "$pushed" <<'REMOTE' || return 1
+set -e
+root=$2; root=${root/#\~/$HOME}
+if [ "$3" = full ]; then
+  cd "$root/.local/share/t3code"
+  chmod +x T3-Code.AppImage.new
+  if [ -f T3-Code.AppImage ]; then cp -p T3-Code.AppImage "T3-Code.AppImage.bak-$1"; fi
+  mv -f T3-Code.AppImage.new T3-Code.AppImage
+  ls -t T3-Code.AppImage.bak-* 2>/dev/null | tail -n +3 | xargs -r rm -f
+fi
+cd "$root/.local/state/t3-fork-sync/runtime"
+if [ "$4" = 1 ]; then ls -t t3-*.tar.gz 2>/dev/null | tail -n +3 | xargs -r rm -f; fi
+(cd stock && ls t3-*-linux-x64.tar.gz 2>/dev/null | sort -V | head -n -2 | xargs -r rm -f)
+chmod +x "$root/.local/bin/t3-runtime-switch.new"
+mv -f "$root/.local/bin/t3-runtime-switch.new" "$root/.local/bin/t3-runtime-switch"
+REMOTE
+  ssh "${sshopt[@]}" "$h" bash -s -- "$RT_DEADLINE" "$mode" "$(basename "$archive")" "$root" "${t3home:--}" "$rmode" <<'REMOTE'
+root=$4; root=${root/#\~/$HOME}
+f="$root/.local/state/t3-fork-sync/runtime/$3"
+args=()
+[ "$2" = no-restart ] && args+=(--no-restart)
+[ "$5" != - ] && args+=(--home "$5")
+[ "$6" = recheck ] && args+=(--recheck)
+T3_RUNTIME_SWITCH_DEADLINE="$1" exec "$root/.local/bin/t3-runtime-switch" "${args[@]}" "$f"
 REMOTE
 }
-# One notify per host from the helper's exit code.
+# One log line (or notify) per host from the helper's exit code. $3 = mode, $4 = full|recheck.
+# 10 (paused), 11 (already current) and 12 (archive is an older release line) are re-check
+# no-ops: logged only, so a quiet night stays quiet.
 rt_report() {
-  local h="$1" rc="$2" m
+  local h="$1" rc="$2" m rmode="${4:-full}"
   case "$rc" in
-    0) if [ "$3" = no-restart ]; then m="staged $rt_ver (service not restarted)"; else m="on $rt_ver"; fi ;;
+    10) log "Server runtime on $h: paused by a manual rollback; left alone"; return ;;
+    11) log "Server runtime on $h: already current"; return ;;
+    12) log "Server runtime on $h: archive is an older release line than the active one; left alone"; return ;;
+    0) if [ "$rmode" = recheck ]; then
+         if [ "$3" = no-restart ]; then m="re-patched $h to $rt_ver (staged; service not restarted)"; else m="re-patched $h to $rt_ver"; fi
+       elif [ "$3" = no-restart ]; then m="staged $rt_ver (service not restarted)"
+       else m="on $rt_ver"; fi ;;
     3) m="staged, still waiting for idle past the deadline; service still on the old runtime" ;;
     4) m="verification failed, rolled back to the previous runtime" ;;
     5) m="a self-update is pending; untouched" ;;
@@ -149,6 +235,42 @@ rt_report() {
     *) m="failed (exit $rc; see $LOG)" ;;
   esac
   notify "Server runtime on $h: $m"
+}
+
+# Roll the runtime out. MODE = full (after a build: AppImage, archive, stock archive, helper) or
+# recheck (no new tag: newest patched archive for $latest_tag, pushed only where missing, helper
+# with --recheck). Each host runs concurrently so one host's idle wait (up to 6 h) never delays
+# the others; a failure here never undoes the AppImage swap. Returns 1 if any host failed.
+rollout() {
+  local rmode="$1" h f b lflag="" mode rt_fail=0 i rt_pids rt_names
+  RT_DEADLINE="${T3_FORK_IDLE_DEADLINE:-21600}"
+  stock_file="$STATE/runtime/stock/t3-${latest_tag#v}-linux-x64.tar.gz"
+  if [ "$rmode" = recheck ]; then
+    archive=""
+    for f in "$STATE/runtime/t3-${latest_tag#v}+modelswitch."*"-linux-x64.tar.gz"; do
+      [ -f "$f" ] || continue
+      if [ -z "$archive" ] || [ "$f" -nt "$archive" ]; then archive=$f; fi
+    done
+    [ -n "$archive" ] || { log "re-check skipped: no patched archive for $latest_tag in $STATE/runtime"; return 0; }
+    b=$(basename "$archive"); b=${b#t3-}; rt_ver=${b%-linux-x64.tar.gz}
+    fetch_stock "$latest_tag"
+    lflag=--recheck
+  fi
+  [ -s "$stock_file" ] || stock_file=""
+  rt_names=(local)
+  ( rt_run local env T3_RUNTIME_SWITCH_DEADLINE="$RT_DEADLINE" t3-runtime-switch ${lflag:+"$lflag"} "$archive"; rc=$?; rt_report local "$rc" default "$rmode"; exit "$rc" ) &
+  rt_pids=($!)
+  for h in ${T3_FORK_HOSTS-levine swx-lt-dev}; do
+    ssh -o BatchMode=yes -o ConnectTimeout=10 "$h" true </dev/null >>"$LOG" 2>&1 || { log "skip $h: unreachable"; continue; }
+    mode=default; [ "$h" = swx-lt-dev ] && mode=no-restart
+    ( rt_run "$h" rt_remote "$h" "$mode" "$rmode"; rc=$?; rt_report "$h" "$rc" "$mode" "$rmode"; exit "$rc" ) &
+    rt_pids+=($!); rt_names+=("$h")
+  done
+  for i in "${!rt_pids[@]}"; do
+    wait "${rt_pids[$i]}"; rc=$?
+    case "$rc" in 0|3|5|10|11|12) ;; *) rt_fail=1; log "runtime roll-out on ${rt_names[$i]} exited $rc" ;; esac
+  done
+  return "$rt_fail"
 }
 
 cd "$REPO" || die "repo missing: $REPO"
@@ -163,7 +285,8 @@ git checkout -q "$DAILY_BRANCH" || die "cannot check out $DAILY_BRANCH"
 
 if git merge-base --is-ancestor "$latest_tag" HEAD && [ "$MODE" != "--force" ]; then
   log "up to date: $DAILY_BRANCH already contains $latest_tag"
-  exit 0
+  [ "$MODE" = "--check" ] && exit 0
+  rollout recheck; exit $?
 fi
 log "new stable release: $latest_tag"
 [ "$MODE" = "--check" ] && exit 0
@@ -188,7 +311,7 @@ fi
 # 2. Review: a read-only Claude reads what changed between the two tags in the files the
 #    patch touches and says whether upstream did the same job, in the same or another shape.
 review="$STATE/review-$latest_tag.md"
-if [ "$upstream_has" = 0 ] && command -v claude >/dev/null; then
+if [ "$upstream_has" = 0 ] && [ "${T3_FORK_SKIP_REVIEW:-}" != 1 ] && command -v claude >/dev/null; then
   files=$(git diff --name-only "$old_base" "$DAILY_BRANCH" | tr '\n' ' ')
   patch_msg=$(git log -1 --format=%B "$(echo "$patches" | tail -1)")
   printf '%s' "You review an upstream release for overlap with a local patch. Read-only; change nothing.
@@ -209,7 +332,9 @@ none = nothing related. overlap = same code changed, but no equivalent feature. 
       upstream_has=1; reason="${verdict_line#VERDICT: }" ;;
   esac
 else
-  [ "$upstream_has" = 0 ] && log "review skipped: claude CLI not found"
+  if [ "$upstream_has" = 0 ]; then
+    if [ "${T3_FORK_SKIP_REVIEW:-}" = 1 ]; then log "review skipped: T3_FORK_SKIP_REVIEW=1"; else log "review skipped: claude CLI not found"; fi
+  fi
 fi
 
 if [ "$upstream_has" = 0 ]; then
@@ -277,25 +402,10 @@ ls -t "$APPIMAGE".bak-* 2>/dev/null | tail -n +3 | xargs -r rm -f
 git branch -M "$next" "$DAILY_BRANCH" 2>/dev/null || { git branch -D "$DAILY_BRANCH" >/dev/null; git branch -m "$next" "$DAILY_BRANCH"; }
 if [ "$upstream_has" = 1 ]; then
   notify "Updated to $latest_tag (stock, your change dropped): $reason. Check the skills still match. Review: $review. Background services stay on their current runtime; update them with the app's \"Update server\"."
+  fetch_stock "$latest_tag"
   exit 0
 fi
 notify "Updated to $latest_tag with your model-switch change. Restart T3 to use it. Old app: $bak"
 
-# Roll the runtime out. Each host runs concurrently so one host's idle wait (up to 6 h) never
-# delays the others; a failure here never undoes the AppImage swap.
-RT_DEADLINE="${T3_FORK_IDLE_DEADLINE:-21600}"
-rt_names=(local)
-( rt_run local env T3_RUNTIME_SWITCH_DEADLINE="$RT_DEADLINE" t3-runtime-switch "$archive"; rc=$?; rt_report local "$rc" default; exit "$rc" ) &
-rt_pids=($!)
-for h in ${T3_FORK_HOSTS-levine swx-lt-dev}; do
-  ssh -o BatchMode=yes -o ConnectTimeout=10 "$h" true </dev/null >>"$LOG" 2>&1 || { log "skip $h: unreachable"; continue; }
-  mode=default; [ "$h" = swx-lt-dev ] && mode=no-restart
-  ( rt_run "$h" rt_remote "$h" "$mode"; rc=$?; rt_report "$h" "$rc" "$mode"; exit "$rc" ) &
-  rt_pids+=($!); rt_names+=("$h")
-done
-rt_fail=0
-for i in "${!rt_pids[@]}"; do
-  wait "${rt_pids[$i]}"; rc=$?
-  case "$rc" in 0|3|5) ;; *) rt_fail=1; log "runtime roll-out on ${rt_names[$i]} exited $rc" ;; esac
-done
-exit "$rt_fail"
+fetch_stock "$latest_tag"
+rollout full; exit $?

@@ -7,16 +7,41 @@
 # Usage:
 #   t3-runtime-switch [--wait-idle] [--deadline SECS] [--home DIR] ARCHIVE
 #   t3-runtime-switch --no-restart [--home DIR] ARCHIVE
+#   t3-runtime-switch --recheck ARCHIVE [--no-restart] [--deadline SECS] [--home DIR]
 #   t3-runtime-switch --rollback [--to VERSION] [--deadline SECS] [--home DIR]
+#   t3-runtime-switch --rollback --archive STOCK.tgz [--no-restart] [--deadline SECS] [--home DIR]
+#
+# Options:
+#   --recheck ARCHIVE   the nightly job's mode: exit 10 when paused, 11 when already current, 12 when
+#                       ARCHIVE is an older release line than the active version; otherwise a normal run
+#   --archive STOCK.tgz with --rollback: install the official stock archive t3-<x.y.z>-linux-x64.tar.gz
+#                       (no '+'), check the database, switch to it, and pause the nightly re-check
+#
+# Database check: before every change of activeVersion two things must hold, else exit 1 with nothing
+# changed. (1) The target's own `t3 __service-preflight` runs in a throwaway home and says "ready"
+# (blocked, crash, timeout or unparsable output all refuse). (2) The database's highest migration id
+# (read-only) is not above what the target's release is known to support: built-in table
+# 0.1.2=67, 0.1.3=69, 0.1.9=81 (release core, any +suffix ignored). Releases before 0.1.9 predate
+# upstream's migration check and always answer "ready", so the table is what protects them. A release
+# not in the table is refused when older than 0.1.9 and left to upstream's check when 0.1.9 or newer.
+# An unreadable existing database refuses; a missing one passes.
+#
+# Pause flag runtime/.t3-runtime-switch.paused (time + reason): every successful --rollback writes it;
+# --recheck then exits 10 and does nothing. A manual run with an ARCHIVE (no --recheck) removes it.
 #
 # Exit codes:
 #   0  switched and verified (or already running it healthy, or staged with --no-restart)
-#   1  error before anything was switched (or the switch was undone before any restart)
+#   1  error before anything was switched (or the switch was undone before any restart);
+#      includes a database check that is blocked
 #   2  usage
 #   3  idle deadline passed: runtime installed and staged, service left as it was
 #   4  verification failed and the service was rolled back to the previous runtime
 #   5  a self-update is pending in service-state.json: aborted, nothing changed
 #   6  failure after a restart, or rollback failed/blocked: look at the service now
+#   --recheck only:
+#   10 paused by a manual rollback: nothing done
+#   11 already the active version and healthy: nothing done
+#   12 ARCHIVE is an older release line than the active version: nothing done
 #
 # A run row stuck in a busy status makes --wait-idle wait out the full deadline (exit 3).
 # Env: T3CODE_HOME (default ~/.t3), T3_RUNTIME_SWITCH_DEADLINE (secs, default 21600),
@@ -27,8 +52,10 @@ trap '' HUP   # an ssh drop must not abort a switch half-way
 PROG=t3-runtime-switch
 MODE=switch
 RESTART=1
+RECHECK=0
 ROLLBACK_TO=""
 ARCHIVE=""
+STOCK_ARCHIVE=""
 T3_HOME="${T3CODE_HOME:-$HOME/.t3}"
 DEADLINE="${T3_RUNTIME_SWITCH_DEADLINE:-21600}"
 UNIT="${T3_SERVICE_UNIT:-t3code.service}"
@@ -36,10 +63,12 @@ POLL=30
 BUSY_STATUSES="'queued','preparing','starting','running','waiting'"
 PATCH_RE='^[0-9]+\.[0-9]+\.[0-9]+\+modelswitch\.[0-9a-f]+$'
 VERSION_RE='^[0-9A-Za-z][0-9A-Za-z.+_-]*$'
+SEMVER_RE='^[0-9]+\.[0-9]+\.[0-9]+$'
+STOCK_ARCHIVE_RE='^t3-[0-9]+\.[0-9]+\.[0-9]+-linux-x64\.tar\.gz$'
 
 log() { printf '%s %s: %s\n' "$(date '+%F %T')" "$PROG" "$*" >&2; }
 die() { log "ERROR: $*"; exit "${2:-1}"; }
-usage() { sed -n '7,10p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '/^# Usage:/,/^# Exit codes:/p' "$0" | sed '1d;$d' | sed 's/^# \{0,1\}//' >&2; exit 2; }
 need_arg() { [ $# -ge 2 ] && [ -n "$2" ] || { log "$1 needs a value"; usage; }; }
 
 while [ $# -gt 0 ]; do
@@ -47,6 +76,8 @@ while [ $# -gt 0 ]; do
     --wait-idle) RESTART=1 ;;
     --no-restart) RESTART=0 ;;
     --rollback) MODE=rollback ;;
+    --recheck) need_arg "$@"; [ -z "$ARCHIVE" ] || usage; RECHECK=1; ARCHIVE="$2"; shift ;;
+    --archive) need_arg "$@"; STOCK_ARCHIVE="$2"; shift ;;
     --to) need_arg "$@"; ROLLBACK_TO="$2"; shift ;;
     --deadline) need_arg "$@"; DEADLINE="$2"; shift ;;
     --home) need_arg "$@"; T3_HOME="$2"; shift ;;
@@ -58,6 +89,11 @@ while [ $# -gt 0 ]; do
 done
 [[ "$DEADLINE" =~ ^[0-9]+$ ]] || { log "--deadline must be whole seconds"; usage; }
 [ -z "$ROLLBACK_TO" ] || [[ "$ROLLBACK_TO" =~ $VERSION_RE ]] || { log "bad --to version"; usage; }
+[ "$RECHECK" = 0 ] || [ "$MODE" = switch ] || { log "--recheck cannot be combined with --rollback"; usage; }
+[ -z "$STOCK_ARCHIVE" ] || [ "$MODE" = rollback ] || { log "--archive needs --rollback"; usage; }
+[ -z "$STOCK_ARCHIVE" ] || { [ -z "$ROLLBACK_TO" ] && [ -z "$ARCHIVE" ]; } || { log "--archive cannot be combined with --to or an ARCHIVE argument"; usage; }
+[ -z "$STOCK_ARCHIVE" ] || [[ "$(basename -- "$STOCK_ARCHIVE")" =~ $STOCK_ARCHIVE_RE ]] \
+  || { log "--archive must be an official stock archive named t3-<x.y.z>-linux-x64.tar.gz (no '+')"; usage; }
 [ "$MODE" = rollback ] || [ -n "$ARCHIVE" ] || usage
 for cmd in jq tar flock sqlite3 curl timeout realpath; do command -v "$cmd" >/dev/null || die "$cmd is required"; done
 [ "$RESTART" = 0 ] || command -v systemctl >/dev/null || die "systemctl is required"
@@ -71,6 +107,7 @@ USERDATA="$T3_HOME/userdata"
 DB="$USERDATA/statev2.sqlite"
 SRV_RUNTIME="$USERDATA/server-runtime.json"
 BOOT_LOG="$USERDATA/logs/boot-service.log"
+PAUSE="$RUNTIME/.t3-runtime-switch.paused"
 [ -f "$STATE" ] || die "no $STATE (is the background service installed here?)"
 [ -d "$VERSIONS" ] || die "no $VERSIONS"
 
@@ -205,6 +242,79 @@ restore_or_set() { # back to $1: restore the pre-switch backup byte for byte whe
   fi
 }
 
+# --- database check + pause flag ---------------------------------------------------------
+# Highest migration id each stock release knows. Releases before 0.1.9 predate upstream's migration
+# check (their __service-preflight only checks the launcher protocol and says "ready" on any database),
+# so this table is the extra condition that stops a switch to a release older than the database.
+# Key = release core (version without any +suffix). 0.1.9 and newer also check for themselves.
+declare -A KNOWN_HEAD=( [0.1.2]=67 [0.1.3]=69 [0.1.9]=81 )
+# Upstream's own pre-switch check (the self-update runs it too): the target opens the database
+# read-only and reports whether it supports every migration recorded there. It runs in a throwaway
+# home, like probe_t3. A missing database is "ready" (the target decides). Anything but a clean
+# {"status":"ready"} (blocked, crash, timeout, unparsable) refuses the switch: exit 1, nothing changed.
+table_check() { # $1 = target; dies when the database is ahead of what that release is known to support
+  local target="$1" core head known
+  core=${target%%+*}
+  [ -f "$DB" ] || return 0   # no database yet: nothing to be ahead of
+  known="${KNOWN_HEAD[$core]:-}"
+  if [ -z "$known" ]; then
+    # not in the table: >= 0.1.9 checks for itself; older (or not comparable) cannot be judged
+    if [[ "$core" =~ $SEMVER_RE ]] && ! line_older "$core" 0.1.9; then return 0; fi
+    die "database check: migration head of $target is unknown (no table entry, older than 0.1.9 or not a release version); refusing"
+  fi
+  head=$(sqlite3 -readonly -cmd '.timeout 5000' "file:$DB?mode=ro" \
+    "select case when exists (select 1 from sqlite_master where type='table' and name='effect_sql_migrations') then 1 else 0 end;" 2>/dev/null) \
+    || die "database check: cannot read $DB read-only; refusing to switch to $target"
+  if [ "$head" = 1 ]; then
+    head=$(sqlite3 -readonly -cmd '.timeout 5000' "file:$DB?mode=ro" \
+      "select coalesce(max(migration_id), 0) from effect_sql_migrations;" 2>/dev/null) \
+      || die "database check: cannot read the migrations table of $DB; refusing to switch to $target"
+  else
+    head=0   # a new database records no migrations
+  fi
+  [[ "$head" =~ ^[0-9]+$ ]] || die "database check: unreadable migration head '$head' in $DB; refusing to switch to $target"
+  if [ "$head" -gt "$known" ]; then
+    die "database check blocked $target: the database is at migration $head but $target (release $core) knows up to $known; a newer build wrote them and running $target on this database is not safe"
+  fi
+}
+
+preflight_ok() { # $1 = version about to become active
+  local target="$1" bin="$VERSIONS/$1/t3" proto h out errf status reason
+  proto=$(jq -r '.protocol // 3' "$STATE" 2>/dev/null || echo 3)
+  h=$(mktemp -d); errf="$h/stderr"
+  out=$(HOME="$h" T3CODE_HOME="$h/.t3" timeout 60 "$bin" __service-preflight \
+    --database-path "$DB" --launcher-protocol "$proto" </dev/null 2>"$errf" 9>&- | tail -n 1 || true)
+  status=$(jq -r 'if type == "object" then (.status // "") else "" end' <<<"$out" 2>/dev/null || true)
+  case "$status" in
+    ready) rm -rf -- "$h"; table_check "$target"; log "database check: $target is ready"; return 0 ;;
+    blocked)
+      reason=$(jq -r '.reason // "no reason given"' <<<"$out" 2>/dev/null || echo "unreadable reason")
+      rm -rf -- "$h"
+      die "database check blocked $target: $reason" ;;
+    *)
+      reason="no usable answer from $bin __service-preflight (output: ${out:-none}; stderr: $(head -c 300 "$errf" 2>/dev/null | tr '\n' ' '))"
+      rm -rf -- "$h"
+      die "database check could not confirm $target: $reason" ;;
+  esac
+}
+
+write_pause() { # $1 = reason
+  local tmp
+  tmp=$(mktemp "$PAUSE.tmp.XXXXXX")
+  printf 'time=%s\nreason=%s\n' "$(date '+%FT%T%z')" "$1" >"$tmp"
+  mv -f "$tmp" "$PAUSE"
+  log "nightly re-check paused on this host ($1); a manual run with an archive resumes it"
+}
+clear_pause() {
+  [ -e "$PAUSE" ] || return 0
+  rm -f -- "$PAUSE"
+  log "nightly re-check resumed (removed $PAUSE)"
+}
+release_line() { printf '%s\n' "${1%%+*}"; }   # 0.1.9+modelswitch.abc and 0.1.9 are the same line
+line_older() { # $1 older than $2 (both semver lines)
+  [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n 1)" = "$1" ]
+}
+
 # --- restart + verify ----------------------------------------------------------------
 server_up() { # $1 = version, $2 = old pid; prints the new pid when healthy
   local pid origin code
@@ -279,34 +389,48 @@ probe_t3() { # $1 = t3 path, rest = args; runs it in a throwaway home so it cann
 }
 # The server exits unless its build version equals the folder the launcher started it from.
 version_matches() { [ "$(probe_t3 "$2/t3" --version | tail -n 1)" = "t3 v$1" ]; }
-install_archive() { # prints the version
-  local archive="$1" ver base strip partial members help d
+install_archive() { # $1 = archive, $2 = patched (default) | stock; prints the version
+  # stock: the official t3-<x.y.z>-linux-x64.tar.gz. Its version must equal the archive's own version,
+  # the patched-only --model probe is skipped, and an existing versions/<x.y.z> is never replaced.
+  local archive="$1" kind="${2:-patched}" ver base strip partial members help d
+  local -a need
   [ -f "$archive" ] || die "no archive $archive"
   base=$(basename "$archive")
   ver=${base#t3-}; ver=${ver%-linux-x64.tar.gz}
-  [[ "$ver" =~ $PATCH_RE ]] || die "archive name $base does not look like t3-<x.y.z>+modelswitch.<sha>-linux-x64.tar.gz"
+  if [ "$kind" = stock ]; then
+    [[ "$base" =~ $STOCK_ARCHIVE_RE ]] || die "archive name $base does not look like t3-<x.y.z>-linux-x64.tar.gz"
+    need=(t3 client/index.html node_modules resource-monitor)   # releases before 0.1.9 have no lib/
+  else
+    [[ "$ver" =~ $PATCH_RE ]] || die "archive name $base does not look like t3-<x.y.z>+modelswitch.<sha>-linux-x64.tar.gz"
+    need=(t3 client/index.html lib node_modules resource-monitor)
+  fi
   if installed "$ver"; then
     if version_matches "$ver" "$VERSIONS/$ver"; then log "$ver already installed"; echo "$ver"; return; fi
+    [ "$kind" != stock ] || die "$VERSIONS/$ver is a complete install whose t3 --version is not $ver; not replacing a stock runtime"
     [ "$ver" != "$(active_version)" ] && [ "$ver" != "$(running_version)" ] \
       || die "$VERSIONS/$ver is in use but its t3 --version is not $ver; roll back first"
     log "$VERSIONS/$ver holds a different build (t3 --version mismatch); reinstalling"
   fi
+  [ "$kind" != stock ] || [ ! -e "$VERSIONS/$ver" ] || die "$VERSIONS/$ver exists but is not a complete install; not replacing a stock runtime (remove it by hand)"
   [ "$ver" != "$(active_version)" ] || die "$ver is active but not a complete install; fix by hand ($PROG --rollback --to <stock>)"
   members=$(tar -tzf "$archive") || die "cannot list $archive"
   if grep -qxE '(\./)?t3' <<<"$members"; then strip=0
   elif grep -qE '^[^/]+/t3$' <<<"$members"; then strip=1
   else die "archive has no t3 executable at its root"; fi
   partial="$VERSIONS/$ver.partial"
-  rm -rf -- "$partial" "${VERSIONS:?}/$ver"   # both are +modelswitch paths, never stock, never active
+  # patched: both paths are +modelswitch, never active; stock: only the .partial (the dir was checked absent)
+  if [ "$kind" = stock ]; then rm -rf -- "$partial"; else rm -rf -- "$partial" "${VERSIONS:?}/$ver"; fi
   mkdir -m 700 -- "$partial"
   tar -xzf "$archive" -C "$partial" --strip-components="$strip" --no-same-owner
-  for d in t3 client/index.html lib node_modules resource-monitor; do
+  for d in "${need[@]}"; do
     [ -e "$partial/$d" ] || { rm -rf -- "$partial"; die "archive is missing $d"; }
   done
   version_matches "$ver" "$partial" \
     || { rm -rf -- "$partial"; die "t3 --version in the archive is not v$ver; build with package versions stamped to $ver"; }
-  help=$(probe_t3 "$partial/t3" thread send --help)
-  grep -qF -- '--model' <<<"$help" || { rm -rf -- "$partial"; die "$ver's t3 thread send has no --model; not the patched server"; }
+  if [ "$kind" != stock ]; then
+    help=$(probe_t3 "$partial/t3" thread send --help)
+    grep -qF -- '--model' <<<"$help" || { rm -rf -- "$partial"; die "$ver's t3 thread send has no --model; not the patched server"; }
+  fi
   printf '%s\n' "$ver" >"$partial/.install-complete"
   sync -f "$partial/.install-complete" 2>/dev/null || true
   mv -T -- "$partial" "$VERSIONS/$ver"
@@ -330,19 +454,43 @@ prune() { # keep: active, the backup's version, the running server's version; ne
 }
 
 # --- main ----------------------------------------------------------------------------
+if [ "$RECHECK" = 1 ]; then   # the nightly job: stay out of the way of a manual rollback and of newer lines
+  if [ -e "$PAUSE" ]; then
+    log "nightly re-check paused ($(tr '\n' ' ' <"$PAUSE")); nothing done"
+    exit 10
+  fi
+  base=$(basename -- "$ARCHIVE"); want=${base#t3-}; want=${want%-linux-x64.tar.gz}; want=$(release_line "$want")
+  have=$(release_line "$(active_version)")
+  if [[ "$want" =~ $SEMVER_RE && "$have" =~ $SEMVER_RE ]] && line_older "$want" "$have"; then
+    log "$base is release line $want, older than the active line $have; nothing done"
+    exit 12
+  fi
+fi
+
 [ "$(jq -r '.update.status // ""' "$STATE")" != pending ] || die "a self-update is pending in $STATE; not touching it" 5
 
 if [ "$MODE" = rollback ]; then
-  target="${ROLLBACK_TO:-$(jq -r '.activeVersion // ""' "$BACKUP" 2>/dev/null || true)}"
+  if [ -n "$STOCK_ARCHIVE" ]; then
+    target=$(install_archive "$STOCK_ARCHIVE" stock)
+    note="rollback to stock $target (archive $(basename -- "$STOCK_ARCHIVE"))"
+  else
+    target="${ROLLBACK_TO:-$(jq -r '.activeVersion // ""' "$BACKUP" 2>/dev/null || true)}"
+    note="rollback to $target"
+  fi
   [ -n "$target" ] || die "no $BACKUP and no --to VERSION; nothing to roll back to"
   [[ "$target" =~ $VERSION_RE ]] || die "bad version in $BACKUP"
   if [ "$RESTART" = 0 ]; then
     [ "$target" != "$(active_version)" ] || die "$target is already active"
-    set_active_version "$target"; log "activeVersion -> $target (no restart)"; exit 0
+    preflight_ok "$target"
+    set_active_version "$target"; log "activeVersion -> $target (no restart)"
+    write_pause "$note"; exit 0
   fi
   [ "$target" != "$(running_version)" ] || die "the server already runs $target"
+  installed "$target" || die "cannot roll back: $target is not installed" 6
+  preflight_ok "$target"
   roll_back_to "$target" requested
   log "rolled back to $target"
+  write_pause "$note"
   exit 0
 fi
 
@@ -352,29 +500,39 @@ PREV=$(active_version)
 
 if [ "$RESTART" = 0 ]; then
   if [ "$PREV" != "$VER" ]; then
+    preflight_ok "$VER"
     cp -p "$STATE" "$BACKUP"
     set_active_version "$VER"
     log "activeVersion $PREV -> $VER (no restart; takes effect when $UNIT next starts)"
-  else
-    log "$VER is already the active version (no restart)"
+    [ "$RECHECK" = 1 ] || clear_pause
+    prune; exit 0
   fi
-  prune; exit 0
+  log "$VER is already the active version (no restart)"
+  [ "$RECHECK" = 1 ] || clear_pause
+  prune; [ "$RECHECK" = 0 ] || exit 11
+  exit 0
 fi
 
 systemctl --user is-active --quiet "$UNIT" || die "$UNIT is not active here; use --no-restart to stage only"
 RUNNING=$(running_version)
+if [ "$PREV" = "$VER" ] && [ "$RUNNING" = "$VER" ] && pid=$(server_up "$VER" ""); then
+  log "server pid $pid already runs $VER and is healthy"
+  [ "$RECHECK" = 1 ] || clear_pause
+  prune; [ "$RECHECK" = 0 ] || exit 11
+  exit 0
+fi
+preflight_ok "$VER"
 if [ "$PREV" = "$VER" ]; then
-  if [ "$RUNNING" = "$VER" ] && pid=$(server_up "$VER" ""); then
-    log "server pid $pid already runs $VER and is healthy"; prune; exit 0
-  fi
   # Staged earlier with --no-restart but never started: switch from what is really running.
   # shellcheck disable=SC2015  # die on either check failing
   [ -n "$RUNNING" ] && installed "$RUNNING" || die "$VER is staged but the server's running version (${RUNNING:-unknown}) is not a complete install"
   log "$VER is staged but the server runs $RUNNING; switching from $RUNNING"
   PREV="$RUNNING"
+  preflight_ok "$PREV"
   set_active_version "$PREV"
 fi
 installed "$PREV" || die "current activeVersion $PREV is not a complete install; refusing to switch away from an unrestorable state"
+[ "$RECHECK" = 1 ] || clear_pause
 
 while :; do
   wait_for_idle "switch to $VER" || { log "$VER is installed and staged; service still on $PREV"; exit 3; }
